@@ -1,65 +1,84 @@
 #!/usr/bin/env python3
 # PC DEMO ONLY - not FPGA code. Gameplay prototype of Stage 2 (Internship), same structure as the Stage 1 demo.
+# Flow: search the room for 4 logic parts -> bring them to the decoder bench -> wire the 7-segment decoder
+#       (AND/OR wiring game, 3 QA rounds) -> the exit door unlocks.  No in-game computers.
 # Optional images in ../assets/ :  internship.jpg (960x540 room)   player_form0..3.png   closeup_<id>.png (16:9)
-#   ids: whiteboard terminal poster laptop screen pc door      Missing files -> placeholders, the game still runs.
+#   ids: whiteboard chart cabinet toolbox drawer bench door      Missing files -> placeholders, the game still runs.
 import copy, itertools, math, os, sys, time
 import pygame
 
 SCR_W, SCR_H, PANEL_H = 1152, 648, 112      # window: game area 16:9 + virtual board panel
 UW, UH = 960, 540                           # internal UI surface (16:9), scaled up to the window
+CU_X, CU_W = 160, 640                       # close-up panel inside the UI surface
 FEET_HW, FEET_H = 14, 14                    # player collision box (feet)
 SPR_W, SPR_H = 34, 70
 BASE_SPEED = 260.0                          # px / second
 LONG_PRESS_S = 0.8
 ASSET_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
 
-# ---------------- puzzle data (same numbers as the RTL design) ----------------
+# ---------------- decoder data (same numbers as the RTL design) ----------------
 SEGS = "abcdefg"
 CHAR_NAME = {1: "C", 2: "P", 3: "E", 4: "-", 5: "3", 6: "9"}          # input code CBA -> character
 GOLD = {1: "adef", 2: "abefg", 3: "adefg", 4: "g", 5: "abcdg", 6: "abcdfg"}
-OPT_NAMES = ["0", "1", "A", "~A", "B", "~B", "C", "~C", "~C+B+A", "B~A+CA", "C(A+B)", "A+CB", "~C+B", "C+B+~A", "AB", "C+B"]
-P2_TESTS = [5, 2]                                # QA tests CBA=101 (shows 3) and CBA=010 (shows P)
-ANS_A = 6                                        # P1: code of '9' = 110
-ANS_B = len(GOLD[2])                             # P2: segments lit for 'P' = 5
-ANS_C = 7                                        # P4: the other don't-care code = 111
-P3_ANS = 12                                      # P3: segment f = ~C + B
-PC_PASS = "PEC"                                  # characters on the projector: P, E, C
-L1_CODE = [int(c) for c in str(ord(PC_PASS[-1]))]            # 'C' = 67 -> [6, 7]
-_S = ANS_A + ANS_B + ANS_C
-_PRE = [ANS_A, ANS_B, ANS_C, _S // 10, _S % 10]             # 6 5 7 1 8
-CODE2 = [_PRE[i] for i in (3, 1, 4, 0, 2)]                  # order 4-2-5-1-3 -> 1 5 8 6 7
+ROUNDS = 3                                       # QA rounds, 2 random input codes each
+
+# wiring board: 8 source rails, 2 AND gates (2 inputs), 1 OR gate (3 inputs) per segment
+RAILS = ["C", "B", "A", "nC", "nB", "nA", "0", "1"]
+LBL = {"C": "C", "B": "B", "A": "A", "nC": "~C", "nB": "~B", "nA": "~A", "0": "0", "1": "1",
+       "g1": "AND1", "g2": "AND2"}
+PINS = ["a1", "a2", "b1", "b2", "o1", "o2", "o3"]
+PIN_LBL = {"a1": "AND1 in 1", "a2": "AND1 in 2", "b1": "AND2 in 1", "b2": "AND2 in 2",
+           "o1": "OR in 1", "o2": "OR in 2", "o3": "OR in 3"}
+CUR_CLEAR, CUR_QA = 7, 8                         # cursor entries after the 7 pins
+
+# parts hidden in the room
+PART_NAME = {"and1": "AND gate #1", "and2": "AND gate #2", "or": "OR gate", "not": "NOT chip"}
+PART_SPOT = {"and1": "wall cabinet", "and2": "segment chart poster", "or": "toolbox", "not": "parts drawer"}
+PART_USE = {"and1": "upper AND gate", "and2": "lower AND gate", "or": "output OR gate", "not": "~C ~B ~A rails"}
+SPOTS = {"cabinet": ("and1", "DOOR"), "toolbox": ("or", "TRAY"), "drawer": ("not", "DRAWER")}
 
 
 def bits(k): return (k >> 2) & 1, (k >> 1) & 1, k & 1
 
 
-def opt(s, c, b, a):
-    return int([0, 1, a, 1 - a, b, 1 - b, c, 1 - c, (1 - c) | b | a, (b & (1 - a)) | (c & a),
-                c & (a | b), a | (c & b), (1 - c) | b, c | b | (1 - a), a & b, c | b][s])
+def sv(s, c, b, a, w):                           # value of a source (rail or AND output)
+    if s == "g1": return sv(w["a1"], c, b, a, w) & sv(w["a2"], c, b, a, w) if "a1" in w and "a2" in w else 0
+    if s == "g2": return sv(w["b1"], c, b, a, w) & sv(w["b2"], c, b, a, w) if "b1" in w and "b2" in w else 0
+    return {"C": c, "B": b, "A": a, "nC": 1 - c, "nB": 1 - b, "nA": 1 - a, "0": 0, "1": 1}.get(s, 0)
 
+
+def out(w, c, b, a):                             # one segment: OR of its connected inputs
+    return int(any(p in w and sv(w[p], c, b, a, w) for p in ("o1", "o2", "o3")))
+
+
+# ---------------- wiring bench layout (px inside the 640-wide close-up panel) ----------------
+NODE = {k: (64, 172 + i * 32) for i, k in enumerate(RAILS)}
+NODE.update({"g1": (300, 204), "g2": (300, 336)})
+PIN_POS = {"a1": (200, 188), "a2": (200, 220), "b1": (200, 320), "b2": (200, 352),
+           "o1": (382, 252), "o2": (382, 270), "o3": (382, 288)}
+ELBOW = {"a1": 118, "a2": 130, "b1": 142, "b2": 154, "o1": 166, "o2": 178, "o3": 190}   # rail wires turn here
+G_ELBOW = {"o1": 336, "o2": 348, "o3": 360}                                             # AND-output wires
+TAB_RECTS = [pygame.Rect(16 + i * 46, 122, 42, 24) for i in range(7)]
+BTN_CLEAR = pygame.Rect(352, 122, 96, 24)
+BTN_QA = pygame.Rect(456, 122, 168, 24)
+C_PANEL, C_BORDER, C_ON, C_OFF = (17, 26, 43), (45, 64, 94), (34, 197, 94), (70, 86, 111)
+C_GATE, C_SEL, C_MOUSE = (32, 49, 76), (255, 230, 120), (56, 189, 248)
 
 # ---------------- room layout (px in the 960x540 game area) ----------------
 FLOOR = pygame.Rect(40, 210, 880, 290)
 BLOCKERS = [pygame.Rect(80, 320, 200, 70), pygame.Rect(500, 320, 160, 70), pygame.Rect(770, 290, 150, 70)]
 SPAWN = (480.0, 450.0)
 
-HINTS = {
-    "P1": "Look at the work order: which input code shows the character 9? Set the switches to that code.",
-    "P2": "Segment a is ON for every character except '-'. Try ~C + B + A for it, then test.",
-    "P3": "Group the 1s in the map. Don't-care cells (X) may count as 1.",
-    "P4": "The other don't-care is the code where every input is 1.",
-    "P5": "The three characters on the projector spell the password.",
-}
 CARD_ITEMS = {1: ["HINT_HARD", "BOOST", "ARMOR"], 2: ["SHARD", "SLOW", "HINT_SMART"], 3: ["FREEZE", "UNDO", "SHARD"]}
 ITEM_TEXT = {
     "HINT_HARD": ("Hint", "Use it from the inventory (I)."),
     "BOOST": ("Speed Boost", "Saved for the Obby stage. No effect here."),
-    "ARMOR": ("Armor", "Blocks the next wrong code penalty."),
+    "ARMOR": ("Armor", "Blocks the next failed QA penalty."),
     "SHARD": ("Armor Shard", "Collect 2 shards to forge 1 Armor."),
     "SLOW": ("Slow", "You walk slower for 10 seconds."),
     "HINT_SMART": ("Hint", "Use it from the inventory (I)."),
     "FREEZE": ("Freeze", "Stops moving obstacles for 5 s. Saved for Stage 3."),
-    "UNDO": ("Undo", "Reverts your latest edit in puzzle 2, 3 or 5."),
+    "UNDO": ("Undo", "Reverts your latest wiring change."),
 }
 CAREERS = [("AIR", (60, 170, 80)), ("EARTH", (220, 190, 50)), ("WATER", (200, 60, 60))]
 SYMBOLS = [["WING", "PLANE", "FART"], ["SHIP", "GEAR", "MONEY"], ["WORM", "WHITE FLAG", "PLUG"]]
@@ -81,16 +100,18 @@ class Obj:
         self.rect = pygame.Rect(rect)
 
 
+# Same positions as before, so an existing room image still lines up. The three old computer spots
+# (projector, laptop, PC) are now storage places that hide parts; the old terminal is the wiring bench.
 OBJS = [
     Obj("whiteboard", "whiteboard", "Work-order board", 165, 250, 100, (70, 50, 190, 110)),
-    Obj("poster", "kmap", "K-map poster", 345, 250, 90, (300, 60, 90, 90)),
-    Obj("door", "door", "Exit door + keypad", 490, 250, 110, (440, 30, 100, 160)),
-    Obj("screen", "screen", "Projector screen", 690, 250, 110, (600, 50, 180, 110)),
-    Obj("terminal", "terminal", "Decoder board", 180, 420, 110, (80, 320, 200, 70)),
-    Obj("laptop", "dcare", "Intern laptop", 580, 420, 100, (520, 330, 120, 55)),
-    Obj("pc", "pc", "Supervisor PC", 845, 380, 100, (800, 300, 90, 60)),
+    Obj("chart", "chart", "Segment chart poster", 345, 250, 90, (300, 60, 90, 90)),
+    Obj("door", "door", "Exit door", 490, 250, 110, (440, 30, 100, 160)),
+    Obj("cabinet", "search", "Wall cabinet", 690, 250, 110, (600, 50, 180, 110)),
+    Obj("bench", "bench", "Decoder bench", 180, 420, 110, (80, 320, 200, 70)),
+    Obj("toolbox", "search", "Toolbox", 580, 420, 100, (520, 330, 120, 55)),
+    Obj("drawer", "search", "Parts drawer", 845, 380, 100, (800, 300, 90, 60)),
 ]
-PAGED = ("whiteboard", "kmap", "dcare", "terminal", "pc")
+PAGED = ("whiteboard", "chart", "bench")
 
 
 def load_img(name, size=None):
@@ -115,12 +136,12 @@ def draw_set(scr, on, x, y, w, h, off=(50, 22, 22)):
         pygame.draw.rect(scr, (255, 60, 40) if k in on else off, r)
 
 
-def draw_digit(scr, ch, x, y, w, h):
-    draw_set(scr, SEG_MAP.get(ch, "g"), x, y, w, h)
-
-
 def sw_cx(i):
     return 360 + (15 - i) * 48 + 22
+
+
+def near(pos, pt, r):
+    return (pos[0] - pt[0]) ** 2 + (pos[1] - pt[1]) ** 2 <= r * r
 
 
 class Game:
@@ -150,16 +171,18 @@ class Game:
         self.px, self.py = SPAWN
         self.mode, self.cur, self.page, self.cmsg = "map", None, 0, ""
         self.state = "play"
-        self.solved = [False] * 5
-        self.p2, self.p2_cur = [0] * 7, 0
-        self.p3_sel = 0
-        self.p5, self.p5_cur = [0, 0, 0], 0
+        self.parts = {p: False for p in PART_NAME}                  # parts found so far
+        self.spots = {sid: {"slot": self.lfsr_pick(3), "open": set()} for sid in SPOTS}
+        self.s_cur = 1
+        self.rnd, self.codes = 0, None                              # QA rounds cleared / current test inputs
+        self.w = {s: {} for s in SEGS}                              # wiring: segment -> {pin: source}
+        self.wseg, self.wcur = 0, 4                                 # current segment tab / cursor (pin, CLEAR, QA)
+        self.wsrc, self.wprev, self.msel = None, None, None         # source picker / saved wire / mouse selection
         self.undo_rec = None
         self.notes, self.hints_seen = [], []
         self.hh = self.hs = self.undo = self.freeze = self.armor = self.shard = 0
         self.boost, self.slow_t = False, 0.0
         self.hearts = 3
-        self.door_layer, self.door_digits, self.door_cur = 0, [0] * 5, 0
         self.deck = {"active": False, "round": 1, "perm": (0, 1, 2), "cursor": 1, "face": None}
         self.career = None
         self.r_run = {1: False, 2: False, 3: False}
@@ -172,7 +195,7 @@ class Game:
 
     # ---------------- input ----------------
     def poll(self, events):
-        ev = dict(up=0, down=0, left=0, right=0, tap=0, back=0)
+        ev = dict(up=0, down=0, left=0, right=0, tap=0, back=0, click=None)
         now = time.time()
         for e in events:
             if e.type == pygame.QUIT:
@@ -181,6 +204,8 @@ class Game:
                 for i, r in enumerate(self.sw_rects):
                     if r.collidepoint(e.pos):
                         self.sw[i] = not self.sw[i]
+                if e.pos[1] < SCR_H:                 # click inside the game area -> close-up panel coordinates
+                    ev["click"] = (e.pos[0] * UW / SCR_W - CU_X, e.pos[1] * UH / SCR_H)
             if e.type == pygame.KEYDOWN:
                 k = e.key
                 if k in (pygame.K_UP, pygame.K_w): ev["up"] = 1
@@ -208,35 +233,39 @@ class Game:
         return ev
 
     def cheat_solve(self):
-        for i in range(5):
-            if not self.solved[i]:
-                self.solved[i] = True
-                self.say("[DEBUG] puzzle %d marked solved" % (i + 1))
-                return
+        for p in PART_NAME:
+            if not self.parts[p]:
+                self.parts[p] = True
+                return self.say("[DEBUG] found %s" % PART_NAME[p])
+        if self.rnd < ROUNDS:
+            self.rnd += 1
+            self.say("[DEBUG] QA round %d marked clear" % self.rnd)
+            if self.rnd < ROUNDS: self.new_round()
 
-    # ---------------- random cards (LFSR) ----------------
+    # ---------------- random (LFSR) ----------------
     def lfsr_step(self):
         q = self.lfsr
         fb = ((q >> 15) ^ (q >> 14) ^ (q >> 12) ^ (q >> 3)) & 1
         q = ((q << 1) | fb) & 0xFFFF
         self.lfsr = q if q else 0xACE1
 
-    def card_start(self, r):
-        while True:                      # LFSR value 0..5 -> one of the 6 permutations
+    def lfsr_pick(self, n):              # LFSR value 0..n-1 (n <= 8): take 3 bits, retry if out of range
+        while True:
             self.lfsr_step()
             v = self.lfsr & 7
-            if v < 6:
-                break
-        self.deck = {"active": True, "round": r, "perm": PERMS[v], "cursor": 1, "face": None}
+            if v < n:
+                return v
+
+    def card_start(self, r):
+        self.deck = {"active": True, "round": r, "perm": PERMS[self.lfsr_pick(6)], "cursor": 1, "face": None}
         self.r_run[r] = True
 
-    def card_trigger(self):
+    def card_trigger(self):              # round 1: start | round 2: all parts found | round 3: 2 QA rounds cleared
         if self.deck["active"]:
             return
-        n = sum(self.solved)
         if not self.r_run[1]: self.card_start(1)
-        elif self.r_done[1] and not self.r_run[2] and n >= 3: self.card_start(2)
-        elif self.r_done[2] and not self.r_run[3] and n == 5: self.card_start(3)
+        elif self.r_done[1] and not self.r_run[2] and all(self.parts.values()): self.card_start(2)
+        elif self.r_done[2] and not self.r_run[3] and self.rnd >= 2: self.card_start(3)
 
     def cards_input(self, ev):
         d = self.deck
@@ -267,25 +296,110 @@ class Game:
                 self.shard = 0
                 self.armor = cap(self.armor)
 
-    # ---------------- items ----------------
-    def smart_hint(self):
-        if not self.solved[4]:
-            return "P5"
-        for idx in (1, 2, 0, 3):         # hardest first: P2, P3, P1, P4
-            if not self.solved[idx]:
-                return "P%d" % (idx + 1)
-        return None
+    # ---------------- decoder wiring ----------------
+    def new_round(self):                 # 2 different input codes (1..6) from the LFSR, board wiped
+        first = 1 + self.lfsr_pick(6)
+        second = 1 + self.lfsr_pick(5)
+        if second >= first: second += 1
+        self.codes = [first, second]
+        self.w = {s: {} for s in SEGS}
+        self.wseg, self.wcur = 0, 4
+        self.wsrc, self.wprev, self.msel, self.undo_rec = None, None, None, None
 
-    def show_hint(self, key):
-        self.hint_popup = HINTS[key]
-        if HINTS[key] not in self.hints_seen:
-            self.hints_seen.append(HINTS[key])
+    def on_of(self, k):                  # segments your wiring lights for input code k
+        c, b, a = bits(k)
+        return "".join(s for s in SEGS if out(self.w[s], c, b, a))
+
+    def seg_ok(self, s):                 # segment s matches the target on both test inputs
+        return all(out(self.w[s], *bits(k)) == int(s in GOLD[k]) for k in self.codes)
+
+    def code3(self): return sum(1 << i for i in range(3) if self.sw[i])
+
+    def wiring_live(self):
+        return (self.mode == "closeup" and self.cur is not None and self.cur.kind == "bench"
+                and self.page == 1 and self.codes is not None)
+
+    def rec_undo(self):
+        self.undo_rec = copy.deepcopy(self.w)
+
+    def src_opts(self, pin):             # AND inputs take rails only; OR inputs also take the AND outputs
+        return [None] + RAILS + (["g1", "g2"] if pin[0] == "o" else [])
+
+    def set_wire(self, pin, src):
+        w = self.w[SEGS[self.wseg]]
+        if src is None: w.pop(pin, None)
+        else: w[pin] = src
+
+    def qa_submit(self):
+        good = sum(set(self.on_of(k)) == set(GOLD[k]) for k in self.codes)
+        self.notes.append("QA round %d: %d/2 inputs correct" % (self.rnd + 1, good))
+        if good < 2:
+            self.cmsg = "QA FAILED: %d / 2 inputs correct." % good
+            return self.damage()
+        self.rnd += 1
+        if self.rnd >= ROUNDS:
+            self.cmsg = "DECODER VERIFIED. All %d QA rounds passed." % ROUNDS
+            self.say("The exit door is unlocked!")
+        else:
+            self.new_round()
+            self.cmsg = "ROUND %d CLEAR. Board wiped, next work order loaded." % self.rnd
+            self.say("QA passed!")
+
+    def damage(self):
+        if self.armor > 0:
+            self.armor -= 1
+            return self.say("ARMOR PROTECTED!")
+        self.hearts -= 1
+        self.flash = 0.4
+        if self.hearts <= 0:
+            self.state, self.over_until = "over", time.time() + 3.0
+        else:
+            self.say("QA failed! -1 heart")
+
+    def found(self, pid):
+        self.parts[pid] = True
+        self.notes.append("Found %s (%s)" % (PART_NAME[pid], PART_SPOT[pid]))
+        left = sum(not v for v in self.parts.values())
+        self.cmsg = "You found the %s! %s" % (PART_NAME[pid], ("%d part(s) still hidden." % left) if left
+                                              else "That is all 4. Bring them to the decoder bench.")
+        self.say("Found: %s" % PART_NAME[pid])
+
+    # ---------------- items ----------------
+    def wiring_hint(self, exact):
+        for s in SEGS:
+            if self.seg_ok(s):
+                continue
+            t = [int(s in GOLD[k]) for k in self.codes]
+            ins = ["%d%d%d" % bits(k) for k in self.codes]
+            if not exact:
+                return "Segment %s must be %s for input %s and %s for input %s." % (
+                    s, "ON" if t[0] else "OFF", ins[0], "ON" if t[1] else "OFF", ins[1])
+            if t[0] == t[1]:
+                fix = "wire rail 1 into an OR input" if t[0] else "leave the OR gate unwired"
+            else:
+                rail = next(r for r in RAILS[:6] if [sv(r, *bits(k), {}) for k in self.codes] == t)
+                fix = "wire %s straight into an OR input" % LBL[rail]
+            return "Segment %s: press CLEAR, then %s." % (s, fix)
+        return "Every segment already matches. Run the QA test."
+
+    def smart_hint(self):
+        missing = [p for p in PART_NAME if not self.parts[p]]
+        if missing: return "A part is still hidden. Search the %s." % PART_SPOT[missing[0]]
+        if self.rnd >= ROUNDS: return None
+        if self.codes is None: return "All parts found. Go to the decoder bench and power it on."
+        return self.wiring_hint(True)
+
+    def show_hint(self, text):
+        self.hint_popup = text
+        if text not in self.hints_seen:
+            self.hints_seen.append(text)
 
     def use_item(self, name):
         if name == "HINT_HARD":
             if self.hh == 0: return self.say("You do not have this item.")
-            if self.solved[1]: return self.say("Not useful now: that puzzle is already solved.")
-            self.hh -= 1; self.show_hint("P2")
+            if self.rnd >= ROUNDS: return self.say("Not useful now: the decoder is already verified.")
+            if self.codes is None: return self.say("Not useful yet: power on the decoder bench first.")
+            self.hh -= 1; self.show_hint(self.wiring_hint(False))
         elif name == "HINT_SMART":
             if self.hs == 0: return self.say("You do not have this item.")
             h = self.smart_hint()
@@ -293,61 +407,18 @@ class Game:
             self.hs -= 1; self.show_hint(h)
         elif name == "UNDO":
             if self.undo == 0: return self.say("You do not have this item.")
-            if not self.undo_rec or self.solved[self.undo_rec[2]]: return self.say("Nothing to undo right now.")
+            if self.undo_rec is None or self.rnd >= ROUNDS: return self.say("Nothing to undo right now.")
             self.undo -= 1
-            kind, snap, _ = self.undo_rec
-            if kind == "p2": self.p2 = snap
-            elif kind == "p3": self.p3_sel = snap
-            else: self.p5 = snap
-            self.undo_rec = None
-            self.say("Your last edit was undone.")
+            self.w, self.undo_rec, self.wsrc, self.msel = self.undo_rec, None, None, None
+            self.say("Your last wiring change was undone.")
         elif name == "FREEZE":
             if self.freeze == 0: return self.say("You do not have this item.")
             self.say("No moving obstacles here. Keep it for Stage 3.")
-
-    def rec_undo(self, kind):
-        src = {"p2": self.p2, "p3": self.p3_sel, "p5": self.p5}[kind]
-        self.undo_rec = (kind, copy.deepcopy(src), {"p2": 1, "p3": 2, "p5": 4}[kind])
 
     def inventory_input(self, ev):
         if ev["left"]: self.inv_cur = (self.inv_cur - 1) % 4
         elif ev["right"]: self.inv_cur = (self.inv_cur + 1) % 4
         elif ev["tap"]: self.use_item(USABLE[self.inv_cur])
-
-    # ---------------- door / hearts ----------------
-    def door_damage(self):
-        if self.armor > 0:
-            self.armor -= 1
-            self.say("ARMOR PROTECTED!")
-            return
-        self.hearts -= 1
-        self.flash = 0.4
-        if self.hearts <= 0:
-            self.state, self.over_until = "over", time.time() + 3.0
-        else:
-            self.say("Wrong code! -1 heart")
-
-    def door_confirm(self):
-        n = 2 if self.door_layer == 0 else 5
-        want = L1_CODE if self.door_layer == 0 else CODE2
-        if self.door_digits[:n] == want:
-            self.door_digits, self.door_cur = [0] * 5, 0
-            if self.door_layer == 0:
-                self.door_layer = 1
-                self.cmsg = "LOCK 1 OPEN. Now the 5-digit lock."
-            else:
-                self.state, self.form = "clear", 2
-        else:
-            self.cmsg = "WRONG CODE"
-            self.door_damage()
-
-    def solve(self, i, msg):
-        if self.solved[i]: return
-        self.solved[i] = True
-        self.cmsg = msg
-        self.say("Notebook updated!")
-        if self.undo_rec and self.undo_rec[2] == i:
-            self.undo_rec = None
 
     # ---------------- update ----------------
     def update(self, dt, ev):
@@ -400,109 +471,123 @@ class Game:
         if ev["tap"]:
             o = self.find_near()
             if o:
-                self.mode, self.cur, self.page, self.cmsg = "closeup", o, 0, ""
-
-    def code3(self): return sum(1 << i for i in range(3) if self.sw[i])
+                self.mode, self.cur, self.page, self.cmsg, self.s_cur = "closeup", o, 0, "", 1
 
     def closeup_input(self, ev):
         o = self.cur
         if ev["back"]:
-            if self.page > 0 and o.kind in PAGED:
+            if self.wsrc is not None:                # cancel the source picker, put the old wire back
+                self.set_wire(PINS[self.wcur], self.wprev)
+                self.wsrc = None
+            elif self.page > 0 and o.kind in PAGED:
                 self.page -= 1
             else:
                 self.mode = "map"
-            self.cmsg = ""
+            self.cmsg, self.msel = "", None
             return
         getattr(self, "in_" + o.kind)(ev)
 
-    def on_of(self, k):
-        c, b, a = bits(k)
-        return "".join(sg for i, sg in enumerate(SEGS) if opt(self.p2[i], c, b, a))
-
     def in_whiteboard(self, ev):
-        if self.page == 0:
-            if ev["tap"]: self.page = 1
-        elif ev["tap"] and not self.solved[0]:
-            val = self.code3()
-            self.notes.append("P1 input tested: %d" % val)
-            if val == ANS_A:
-                self.solve(0, "ORDER ACCEPTED. A = %d" % ANS_A)
-            else:
-                self.cmsg = "Code recorded in notebook. (No penalty)."
+        if ev["tap"]: self.page = 1 - self.page
 
-    def in_terminal(self, ev):
-        if self.page == 0:
-            if ev["tap"]: self.page = 1
-            return
-        if self.solved[1]: return
-        c = self.p2_cur
-        if ev["left"]: self.p2_cur = (c - 1) % 7
-        elif ev["right"]: self.p2_cur = (c + 1) % 7
-        elif ev["up"] or ev["down"]:
-            self.rec_undo("p2")
-            self.p2[c] = (self.p2[c] + (1 if ev["up"] else -1)) % 16
+    def in_chart(self, ev):
+        if not ev["tap"]: return
+        if self.page == 0: self.page = 1
+        elif not self.parts["and2"]: self.found("and2")
+
+    def in_search(self, ev):
+        sp = self.spots[self.cur.id]
+        if ev["left"]: self.s_cur = (self.s_cur - 1) % 3
+        elif ev["right"]: self.s_cur = (self.s_cur + 1) % 3
         elif ev["tap"]:
-            good = sum(set(self.on_of(k)) == set(GOLD[k]) for k in P2_TESTS)
-            self.notes.append("P2 QA test: %d/%d inputs correct" % (good, len(P2_TESTS)))
-            if good == len(P2_TESTS):
-                self.solve(1, "DECODER VERIFIED. B = %d" % ANS_B)
-            else:
-                self.cmsg = "QA: %d / %d inputs correct. Logged." % (good, len(P2_TESTS))
-
-    def in_kmap(self, ev):
-        if self.page == 0:
-            if ev["tap"]: self.page = 1
-            return
-        if self.solved[2]: return
-        if ev["up"] or ev["down"]:
-            self.rec_undo("p3")
-            self.p3_sel = (self.p3_sel + (1 if ev["up"] else -1)) % 16
-        elif ev["tap"]:
-            self.notes.append("P3 answer tried: f = %s" % OPT_NAMES[self.p3_sel])
-            if self.p3_sel == P3_ANS:
-                self.solve(2, "MINIMAL FORM FOUND. f = %s" % OPT_NAMES[P3_ANS])
-            else:
-                self.cmsg = "Not the minimal form. Logged."
-
-    def in_dcare(self, ev):
-        if self.page == 0:
-            if ev["tap"]: self.page = 1
-        elif ev["tap"] and not self.solved[3]:
-            val = self.code3()
-            self.notes.append("P4 don't-care tested: %d" % val)
-            if val == ANS_C:
-                self.solve(3, "SPEC FIXED. C = %d" % ANS_C)
-            else:
-                self.cmsg = "Value logged in notebook."
-
-    def in_screen(self, ev): pass
-
-    def in_pc(self, ev):
-        if self.solved[4]:
-            if ev["down"] or ev["tap"]: self.page = min(2, self.page + 1)
-            elif ev["up"]: self.page = max(0, self.page - 1)
-            return
-        c = self.p5_cur
-        if ev["up"]: self.p5_cur = (c - 1) % 3
-        elif ev["down"]: self.p5_cur = (c + 1) % 3
-        elif ev["left"]: self.rec_undo("p5"); self.p5[c] = (self.p5[c] - 1) % 26
-        elif ev["right"]: self.rec_undo("p5"); self.p5[c] = (self.p5[c] + 1) % 26
-        elif ev["tap"]:
-            entered = "".join(chr(65 + v) for v in self.p5)
-            self.notes.append("P5 attempt: " + entered)
-            if entered == PC_PASS:
-                self.solve(4, "ACCESS GRANTED"); self.page = 0
-            else:
-                self.cmsg = "Incorrect passcode. Attempt logged."
+            if self.s_cur in sp["open"]:
+                self.cmsg = "You already looked in there."
+                return
+            sp["open"].add(self.s_cur)
+            if self.s_cur == sp["slot"]: self.found(SPOTS[self.cur.id][0])
+            else: self.cmsg = "Nothing useful. Just dust and old datasheets."
 
     def in_door(self, ev):
-        n = 2 if self.door_layer == 0 else 5
-        c = self.door_cur
-        if ev["left"]: self.door_cur = (c - 1) % n
-        elif ev["right"]: self.door_cur = (c + 1) % n
-        elif ev["up"]: self.door_digits[c] = (self.door_digits[c] + 1) % 10
-        elif ev["down"]: self.door_digits[c] = (self.door_digits[c] - 1) % 10
-        elif ev["tap"]: self.door_confirm()
+        if not ev["tap"]: return
+        if self.rnd >= ROUNDS: self.state, self.form = "clear", 2
+        else: self.cmsg = "Locked. It opens when the decoder passes QA (%d / %d)." % (self.rnd, ROUNDS)
+
+    def in_bench(self, ev):
+        if self.page == 0:
+            if ev["tap"]:
+                missing = [PART_NAME[p] for p in PART_NAME if not self.parts[p]]
+                if missing:
+                    self.cmsg = "Cannot power on. Missing: " + ", ".join(missing)
+                else:
+                    self.page = 1
+                    if self.codes is None and self.rnd < ROUNDS:
+                        self.new_round()
+                        self.notes.append("All parts installed. Decoder bench powered on.")
+            return
+        if self.rnd >= ROUNDS: return
+        if ev["click"]: return self.bench_click(ev["click"])
+        if self.wsrc is not None:                    # source picker: U/D changes the wire live
+            pin = PINS[self.wcur]
+            opts = self.src_opts(pin)
+            if ev["up"] or ev["down"]:
+                self.wsrc = (self.wsrc + (-1 if ev["up"] else 1)) % len(opts)
+                self.set_wire(pin, opts[self.wsrc])
+            elif ev["tap"]:
+                self.wsrc = None
+            return
+        if ev["left"] or ev["right"]:
+            self.wseg = (self.wseg + (1 if ev["right"] else -1)) % 7
+            self.cmsg = ""
+        elif ev["up"]: self.wcur = (self.wcur - 1) % 9
+        elif ev["down"]: self.wcur = (self.wcur + 1) % 9
+        elif ev["tap"]:
+            self.msel = None
+            if self.wcur == CUR_QA: self.qa_submit()
+            elif self.wcur == CUR_CLEAR:
+                self.rec_undo()
+                self.w[SEGS[self.wseg]] = {}
+            else:
+                pin = PINS[self.wcur]
+                self.rec_undo()
+                self.wprev = self.w[SEGS[self.wseg]].get(pin)
+                self.wsrc = self.src_opts(pin).index(self.wprev)
+                self.cmsg = ""
+
+    def bench_click(self, pos):          # mouse (PC demo only): click a source, then click a pin
+        if self.wsrc is not None:
+            self.wsrc = None
+        w = self.w[SEGS[self.wseg]]
+        for i, r in enumerate(TAB_RECTS):
+            if r.collidepoint(pos):
+                self.wseg, self.msel, self.cmsg = i, None, ""
+                return
+        if BTN_QA.collidepoint(pos):
+            self.wcur, self.msel = CUR_QA, None
+            return self.qa_submit()
+        if BTN_CLEAR.collidepoint(pos):
+            self.rec_undo()
+            self.w[SEGS[self.wseg]] = {}
+            self.wcur, self.msel = CUR_CLEAR, None
+            return
+        for key in RAILS + ["g1", "g2"]:
+            if near(pos, NODE[key], 14):
+                self.msel = None if self.msel == key else key
+                self.cmsg = ""
+                return
+        for i, pin in enumerate(PINS):
+            if near(pos, PIN_POS[pin], 12):
+                self.wcur = i
+                if self.msel is None:
+                    if pin in w:
+                        self.rec_undo()
+                        w.pop(pin)
+                elif pin[0] != "o" and self.msel[0] == "g":
+                    self.cmsg = "AND inputs only take C, B, A, ~C, ~B, ~A, 0 or 1."
+                else:
+                    self.rec_undo()
+                    w[pin] = self.msel
+                    self.msel, self.cmsg = None, ""
+                return
 
     # ---------------- drawing helpers ----------------
     def txt(self, s, text, x, y, font=None, color=(255, 255, 255)):
@@ -511,6 +596,10 @@ class Game:
     def ctxt(self, s, text, cx, y, font=None, color=(255, 255, 255)):
         img = (font or self.f_m).render(text, True, color)
         s.blit(img, (cx - img.get_width() // 2, y))
+
+    def rtxt(self, s, text, rx, y, font=None, color=(255, 255, 255)):
+        img = (font or self.f_m).render(text, True, color)
+        s.blit(img, (rx - img.get_width(), y))
 
     def wrap(self, text, font, width):
         lines = []
@@ -551,9 +640,9 @@ class Game:
         else:
             pygame.draw.rect(ui, FORM_COLORS[self.form], (sx, sy + SPR_H // 3, SPR_W, SPR_H - SPR_H // 3), border_radius=6)
             pygame.draw.circle(ui, (240, 200, 160), (sx + SPR_W // 2, sy + SPR_H // 6), max(6, SPR_W // 3))
-        near = self.find_near()
-        if near:
-            self.ctxt(ui, "[Space] " + near.name, int(self.px), int(self.py - SPR_H - 14), self.f_s, (255, 230, 120))
+        o = self.find_near()
+        if o:
+            self.ctxt(ui, "[Space] " + o.name, int(self.px), int(self.py - SPR_H - 14), self.f_s, (255, 230, 120))
         if self.debug:
             pygame.draw.rect(ui, (0, 255, 255), FLOOR, 2)
             for b in BLOCKERS: pygame.draw.rect(ui, (255, 0, 0), b, 2)
@@ -580,133 +669,204 @@ class Game:
         self.txt(s, foot or "", 16, 499, self.f_s, (170, 200, 255))
         self.txt(s, "Back: hold Space (BTNC) or press Esc", 16, 520, self.f_tiny, (140, 150, 180))
 
+    def draw_target(self, s, k, x, y):               # one QA target: input code, wanted shape, your shape
+        ok = set(self.on_of(k)) == set(GOLD[k])
+        pygame.draw.rect(s, (18, 32, 53) if ok else (27, 41, 64), (x, y, 254, 66), border_radius=6)
+        pygame.draw.rect(s, C_ON if ok else C_BORDER, (x, y, 254, 66), 2, border_radius=6)
+        draw_set(s, GOLD[k], x + 12, y + 9, 28, 48, (38, 54, 76))
+        self.txt(s, "CBA = %d%d%d" % bits(k), x + 52, y + 12, self.f_s, (143, 161, 184))
+        self.txt(s, "show  %s" % CHAR_NAME[k], x + 52, y + 34, self.f_m)
+        self.txt(s, "yours", x + 140, y + 27, self.f_tiny, (143, 161, 184))
+        draw_set(s, self.on_of(k), x + 172, y + 9, 28, 48, (38, 54, 76))
+        self.txt(s, "OK" if ok else "--", x + 214, y + 24, self.f_m, C_ON if ok else (143, 161, 184))
+
     def cu_whiteboard(self, s):
         pygame.draw.rect(s, (240, 240, 235), (40, 56, 560, 376), border_radius=6)
         ink = (30, 40, 130)
         if self.page == 0:
-            lines = ["WORK ORDER #402", "Show the character 9 on the board.", "",
-                     "input code CBA -> character", "001 = C    010 = P    011 = E",
-                     "100 = -    101 = 3    110 = 9"]
-            for i, l in enumerate(lines): self.txt(s, l, 70, 78 + i * 38, self.f_mono_l, ink)
-            draw_set(s, GOLD[6], 480, 90, 60, 100, (215, 215, 210))
+            lines = ["WORK ORDER #402", "Build the 7-segment decoder.",
+                     "1. Find 4 parts hidden in this room.", "2. Install them on the decoder bench.",
+                     "3. Wire each segment a-g, pass 3 QA tests.", "",
+                     "input CBA -> character", "001 = C   010 = P   011 = E", "100 = -   101 = 3   110 = 9",
+                     "(000 and 111 never occur)"]
+            for i, l in enumerate(lines): self.txt(s, l, 62, 70 + i * 35, self.f_mono, ink)
             return "BTNC: next page"
-        self.txt(s, "INPUT DIAL  (switches SW2..SW0)", 70, 76, self.f_m, ink)
-        pygame.draw.rect(s, (60, 60, 70), (70, 130, 500, 200), border_radius=8)
-        for k in range(3):
-            i = 2 - k
-            cx = 180 + k * 130
-            pygame.draw.circle(s, (255, 220, 60) if self.sw[i] else (90, 90, 90), (cx, 210), 30)
-            self.ctxt(s, "C B A"[k * 2], cx, 258, self.f_m)
-        self.txt(s, "= %d" % self.code3(), 470, 190, self.f_l)
-        if self.solved[0]: self.txt(s, "LOGGED: A = %d" % ANS_A, 70, 360, self.f_m, (20, 120, 40))
-        return "ANSWER: set SW2-SW0 (keys 1-3), then BTNC"
+        self.txt(s, "QA TEST %d of %d" % (min(self.rnd + 1, ROUNDS), ROUNDS), 70, 76, self.f_mono_l, ink)
+        if self.rnd >= ROUNDS:
+            self.txt(s, "All QA tests passed. Go to the exit door.", 70, 140, self.f_m, (20, 120, 40))
+        elif self.codes is None:
+            self.blit_wrap(s, "The QA inputs appear here once the decoder bench is powered on.", 70, 140, 500, self.f_m, ink)
+        else:
+            for i, k in enumerate(self.codes):
+                self.txt(s, "input CBA = %d%d%d  ->  show %s" % (bits(k) + (CHAR_NAME[k],)), 70, 140 + i * 130, self.f_mono, ink)
+                draw_set(s, GOLD[k], 470, 126 + i * 130, 54, 92, (215, 215, 210))
+        return "BTNC: previous page"
 
-    def cu_terminal(self, s):
-        pygame.draw.rect(s, (10, 20, 10), (40, 60, 560, 360), border_radius=6)
-        g, y = (110, 255, 130), (255, 255, 120)
-        if self.page == 0:
-            lines = ["INTERN BENCH - DECODER BOARD", "",
-                     "Task: wire a 3-bit decoder (C B A)",
-                     "so the 7-segment shows C P E - 3 9.", "Codes 000 and 111 never occur.",
-                     "Pick a formula for each segment a-g.", "QA will test two inputs."]
-            for i, l in enumerate(lines): self.txt(s, l, 56, 76 + i * 34, self.f_mono, g)
-            return "BTNC: open wiring editor"
-        for i, sg in enumerate(SEGS):
-            hl = i == self.p2_cur
-            self.txt(s, ("> " if hl else "  ") + "seg %s: %s" % (sg, OPT_NAMES[self.p2[i]]),
-                     64 + (i // 4) * 280, 74 + (i % 4) * 32, self.f_mono, y if hl else g)
-        for j, k in enumerate(P2_TESTS):
-            x = 70 + j * 280
-            c, b, a = bits(k)
-            self.txt(s, "CBA=%d%d%d  want %s" % (c, b, a, CHAR_NAME[k]), x, 220, self.f_s, g)
-            draw_set(s, GOLD[k], x, 250, 36, 64)
-            draw_set(s, self.on_of(k), x + 90, 250, 36, 64)
-            self.txt(s, "target", x - 2, 322, self.f_tiny, g)
-            self.txt(s, "yours", x + 92, 322, self.f_tiny, g)
-        return "L/R segment | U/D formula | BTNC test"
-
-    def cu_kmap(self, s):
-        pygame.draw.rect(s, (245, 240, 220), (40, 56, 560, 366), border_radius=4)
+    def cu_chart(self, s):
+        pygame.draw.rect(s, (245, 240, 220), (40, 56, 560, 376), border_radius=4)
         ink = (40, 40, 40)
-        self.txt(s, "SEGMENT f  (1 = ON, X = never happens)", 70, 70, self.f_m, ink)
-        self.txt(s, "C \\ BA", 70, 120, self.f_s, ink)
-        cols, vals = ["00", "01", "11", "10"], [["X", "1", "1", "1"], ["0", "0", "X", "1"]]
-        for c in range(4): self.txt(s, cols[c], 150 + c * 70 + 20, 120, self.f_s, ink)
-        for r in range(2):
-            self.txt(s, str(r), 100, 160 + r * 60 + 18, self.f_s, ink)
-            for c in range(4):
-                rc = pygame.Rect(150 + c * 70, 150 + r * 60, 70, 60)
-                pygame.draw.rect(s, ink, rc, 1)
-                self.ctxt(s, vals[r][c], rc.centerx, rc.y + 18, self.f_m, ink)
         if self.page == 0:
-            self.txt(s, "f = ?", 70, 300, self.f_l, ink)
-            return "BTNC: next page"
-        self.txt(s, "f = %s" % OPT_NAMES[self.p3_sel], 70, 300, self.f_l, (30, 80, 160))
-        if self.solved[2]: self.txt(s, "LOGGED: f = %s" % OPT_NAMES[P3_ANS], 70, 350, self.f_m, (20, 120, 40))
-        return "U/D choose formula | BTNC test"
+            self.txt(s, "7-SEGMENT CHART", 60, 68, self.f_m, ink)
+            draw_set(s, "abcdefg", 80, 120, 90, 150, (215, 210, 195))
+            for sg, (lx, ly) in {"a": (125, 100), "b": (180, 150), "c": (180, 222), "d": (125, 274),
+                                 "e": (62, 222), "f": (62, 150), "g": (125, 176)}.items():
+                self.ctxt(s, sg, lx, ly, self.f_m, (255, 255, 255) if sg == "g" else ink)
+            for i, k in enumerate(sorted(GOLD)):
+                x, y = 250 + (i % 3) * 112, 106 + (i // 3) * 150
+                draw_set(s, GOLD[k], x, y, 50, 86, (215, 210, 195))
+                self.ctxt(s, "%d%d%d = %s" % (bits(k) + (CHAR_NAME[k],)), x + 25, y + 94, self.f_s, ink)
+            return "BTNC: look closer"
+        self.txt(s, "One corner of the poster is loose.", 70, 80, self.f_m, ink)
+        pygame.draw.polygon(s, (215, 205, 175), [(430, 300), (560, 300), (560, 400)])
+        pygame.draw.polygon(s, (190, 180, 150), [(430, 300), (560, 400), (470, 392)])
+        if self.parts["and2"]:
+            self.txt(s, "The AND gate that was taped here is yours now.", 70, 130, self.f_s, (20, 120, 40))
+            return ""
+        self.txt(s, "Something small is taped behind it...", 70, 130, self.f_s, ink)
+        return "BTNC: peel the corner"
 
-    def cu_dcare(self, s):
-        pygame.draw.rect(s, (10, 10, 25), (40, 60, 560, 360), border_radius=6)
-        g = (130, 200, 255)
-        if self.page == 0:
-            lines = ["QA LAPTOP - SPEC NOTE", "",
-                     "Two input codes never occur", "(don't-care). One of them is 000.",
-                     "Find the OTHER one.", "", "READY FOR INPUT..."]
-            for i, l in enumerate(lines): self.txt(s, l, 56, 76 + i * 34, self.f_mono, g)
-            return "BTNC: open input console"
-        self.txt(s, "enter code with switches SW2..SW0:", 70, 90, self.f_m, g)
-        self.txt(s, "".join("1" if self.sw[i] else "0" for i in (2, 1, 0)), 70, 140, self.f_mono_l, (255, 255, 120))
-        self.txt(s, "decimal %d" % self.code3(), 70, 190, self.f_m, g)
-        return "ANSWER: set SW2-SW0 (keys 1-3), then BTNC"
-
-    def cu_screen(self, s):
-        pygame.draw.rect(s, (15, 20, 30), (40, 60, 560, 360), border_radius=6)
-        self.ctxt(s, "PROJECTOR: LOGIN HINT", 320, 76, self.f_s, (130, 200, 255))
-        for i, ch in enumerate(PC_PASS):
-            draw_digit(s, ch, 100 + i * 160, 150, 90, 150)
-        self.ctxt(s, "Three characters on the board.", 320, 340, self.f_s, (180, 220, 180))
-        return ""
+    def cu_search(self, s):
+        pid, word = SPOTS[self.cur.id]
+        sp = self.spots[self.cur.id]
+        pygame.draw.rect(s, (58, 48, 40), (40, 56, 560, 376), border_radius=6)
+        self.ctxt(s, "Three places to look. Open them one by one.", 320, 76, self.f_s, (225, 215, 200))
+        for i in range(3):
+            r = pygame.Rect(70 + i * 175, 120, 150, 250)
+            is_open = i in sp["open"]
+            pygame.draw.rect(s, (22, 18, 16) if is_open else (130, 100, 70), r, border_radius=6)
+            if is_open and i == sp["slot"]:
+                pygame.draw.rect(s, (25, 25, 30), (r.centerx - 30, r.centery - 18, 60, 36), border_radius=4)
+                for px in range(4):
+                    pygame.draw.line(s, (190, 190, 200), (r.centerx - 21 + px * 14, r.centery - 26), (r.centerx - 21 + px * 14, r.centery + 26), 3)
+                pygame.draw.rect(s, (25, 25, 30), (r.centerx - 30, r.centery - 18, 60, 36), border_radius=4)
+                self.ctxt(s, PART_NAME[pid], r.centerx, r.centery + 40, self.f_s, (150, 255, 170))
+                self.ctxt(s, "TAKEN", r.centerx, r.centery + 62, self.f_tiny, (150, 255, 170))
+            elif is_open:
+                self.ctxt(s, "empty", r.centerx, r.centery - 8, self.f_s, (120, 110, 100))
+            else:
+                self.ctxt(s, "%s %d" % (word, i + 1), r.centerx, r.centery - 10, self.f_m, (240, 230, 215))
+                pygame.draw.circle(s, (60, 45, 30), (r.centerx, r.centery + 30), 7)
+            if i == self.s_cur:
+                pygame.draw.rect(s, C_SEL, r.inflate(10, 10), 4, border_radius=9)
+        return "L/R choose | BTNC open"
 
     def cu_door(self, s):
-        pygame.draw.rect(s, (120, 85, 55), (240, 56, 160, 230), border_radius=6)
-        n = 2 if self.door_layer == 0 else 5
-        self.ctxt(s, "LOCK %d of 2  (%d digits)" % (self.door_layer + 1, n), 320, 298, self.f_m)
-        x0 = 320 - n * 70 // 2
-        for i in range(n):
-            r = pygame.Rect(x0 + i * 70 + 5, 332, 60, 64)
-            pygame.draw.rect(s, (255, 230, 120) if i == self.door_cur else (200, 200, 200), r, border_radius=6)
-            self.ctxt(s, str(self.door_digits[i]), r.centerx, r.y + 14, self.f_l, (20, 20, 20))
-        return "U/D digit | L/R box | BTNC confirm"
+        pygame.draw.rect(s, (120, 85, 55), (240, 56, 160, 250), border_radius=6)
+        done = self.rnd >= ROUNDS
+        pygame.draw.circle(s, C_ON if done else (220, 60, 60), (376, 185), 9)
+        self.ctxt(s, "UNLOCKED" if done else "LOCKED", 320, 320, self.f_l, C_ON if done else (255, 120, 120))
+        self.ctxt(s, "Decoder QA: %d / %d" % (self.rnd, ROUNDS), 320, 362, self.f_m)
+        if not done:
+            self.ctxt(s, "The lock is wired to the decoder bench.", 320, 394, self.f_s, (200, 200, 210))
+        return "BTNC: leave the lab" if done else "BTNC: try the handle"
 
-    def cu_pc(self, s):
-        pygame.draw.rect(s, (15, 25, 50), (40, 60, 560, 360), border_radius=6)
-        c = (160, 200, 255)
-        if not self.solved[4]:
-            self.txt(s, "SUPERVISOR TERMINAL LOGIN", 70, 75, self.f_mono, c)
-            self.txt(s, "Enter 3-letter passcode (A-Z):", 70, 115, self.f_s, c)
-            for i in range(3):
-                r = pygame.Rect(180 + i * 90, 150, 70, 70)
-                pygame.draw.rect(s, (255, 230, 120) if i == self.p5_cur else (60, 75, 110), r, border_radius=8)
-                self.ctxt(s, chr(65 + self.p5[i]), r.centerx, r.y + 18, self.f_l, (255, 255, 255))
-            self.txt(s, "Read the characters on the projector screen", 70, 250, self.f_tiny, (180, 220, 180))
-            return "U/D box | L/R letter (A-Z) | BTNC enter"
+    def cu_bench(self, s):
         if self.page == 0:
-            self.txt(s, "Welcome, supervisor.", 70, 90, self.f_mono_l, c)
-            self.txt(s, "[ door_manual.txt ]", 70, 150, self.f_mono_l, (255, 230, 120))
-            return "U/D or BTNC: open file"
-        if self.page == 1:
-            lines = ["DOOR - LAYER 1  (2 digits)", "1. Take the LAST letter of your login password.",
-                     "2. Find it in the table (values are HEX).", "3. Key in its DECIMAL value.", "",
-                     "A 41  B 42  C 43  D 44  E 45  F 46  G 47", "H 48  I 49  J 4A  K 4B  L 4C  M 4D  N 4E",
-                     "O 4F  P 50  Q 51  R 52  S 53  T 54  U 55", "V 56  W 57  X 58  Y 59  Z 5A"]
-        else:
-            lines = ["DOOR - LAYER 2  (5 digits)", "A = work-order board result",
-                     "B = decoder board result", "C = QA laptop result",
-                     "Step 1: S = A + B + C.  Row: A B C S", "        (S has two digits -> 5 digits)",
-                     "Step 2: new digit 1 = old position 4,", "        then old 2, 5, 1, 3.",
-                     "Example: row 2 4 6 8 9 -> 8 4 9 2 6"]
-        for i, l in enumerate(lines): self.txt(s, l, 56, 74 + i * 33, self.f_mono, c)
-        return "U/D page"
+            pygame.draw.rect(s, (10, 20, 10), (40, 60, 560, 360), border_radius=6)
+            g = (110, 255, 130)
+            self.txt(s, "DECODER BENCH - PARTS SOCKETS", 56, 76, self.f_mono, g)
+            for i, p in enumerate(PART_NAME):
+                have = self.parts[p]
+                y = 124 + i * 46
+                pygame.draw.rect(s, (30, 70, 40) if have else (40, 30, 30), (56, y, 528, 38), border_radius=5)
+                self.txt(s, "[OK]" if have else "[  ]", 66, y + 9, self.f_mono, g if have else (255, 120, 120))
+                self.txt(s, "%-13s %s" % (PART_NAME[p], ("installed: " + PART_USE[p]) if have else "MISSING - search the room"),
+                         122, y + 9, self.f_mono, g if have else (255, 170, 150))
+            if self.rnd >= ROUNDS: self.txt(s, "DECODER VERIFIED.", 56, 330, self.f_mono, (255, 255, 120))
+            elif all(self.parts.values()): self.txt(s, "All parts installed. Ready to power on.", 56, 330, self.f_mono, (255, 255, 120))
+            else: self.txt(s, "Bring all 4 parts here to power the board.", 56, 330, self.f_mono, g)
+            return "BTNC: power on / open the wiring board"
+        return self.draw_wiring(s)
+
+    def draw_wiring(self, s):
+        seg = SEGS[self.wseg]
+        w = self.w[seg]
+        c, b, a = bits(self.code3())
+        done = self.rnd >= ROUNDS
+        muted = (143, 161, 184)
+        # QA targets + round box
+        for i, k in enumerate(self.codes):
+            self.draw_target(s, k, 16 + i * 262, 50)
+        pygame.draw.rect(s, C_PANEL, (540, 50, 84, 66), border_radius=6)
+        self.ctxt(s, "ROUND", 582, 58, self.f_tiny, muted)
+        self.ctxt(s, "%d / %d" % (min(self.rnd + 1, ROUNDS), ROUNDS), 582, 78, self.f_m)
+        # segment tabs, CLEAR, RUN QA
+        for i, r in enumerate(TAB_RECTS):
+            pygame.draw.rect(s, (14, 165, 233) if i == self.wseg else (27, 41, 64), r, border_radius=4)
+            self.ctxt(s, SEGS[i], r.centerx - 5, r.y + 3, self.f_m)
+            pygame.draw.circle(s, C_ON if self.seg_ok(SEGS[i]) else (120, 60, 60), (r.right - 9, r.centery), 4)
+        for r, label, idx in ((BTN_CLEAR, "CLEAR", CUR_CLEAR), (BTN_QA, "RUN QA TEST", CUR_QA)):
+            hot = self.wcur == idx and not done
+            pygame.draw.rect(s, C_SEL if hot else (27, 41, 64), r, border_radius=4)
+            self.ctxt(s, label, r.centerx, r.y + 5, self.f_s, (20, 20, 20) if hot else (255, 255, 255))
+        # board
+        pygame.draw.rect(s, C_PANEL, (16, 152, 608, 270), border_radius=6)
+        pygame.draw.rect(s, C_BORDER, (16, 152, 608, 270), 1, border_radius=6)
+        cur_pin = PINS[self.wcur] if self.wcur < 7 else None
+        picking = self.wsrc is not None
+        if done: status = "Decoder verified. The exit door is unlocked."
+        elif picking: status = "%s  <-  %s" % (PIN_LBL[cur_pin], LBL.get(w.get(cur_pin), "(no wire)"))
+        elif self.msel: status = "Selected %s  ->  now click a pin" % LBL[self.msel]
+        elif cur_pin: status = "%s  =  %s" % (PIN_LBL[cur_pin], LBL.get(w.get(cur_pin), "(no wire)"))
+        else: status = "Press BTNC" if self.wcur == CUR_QA else "Press BTNC to remove every wire of segment %s" % seg
+        self.txt(s, "SEGMENT %s   |   %s" % (seg, status), 100, 156, self.f_tiny, C_SEL if picking else muted)
+        # wires (drawn first so they pass under the gates)
+        for pin in PINS:
+            if pin not in w: continue
+            src = w[pin]
+            (sx, sy), (tx, ty) = NODE[src], PIN_POS[pin]
+            ex = G_ELBOW[pin] if src[0] == "g" else ELBOW[pin]
+            col = C_SEL if (picking and pin == cur_pin) else (C_ON if sv(src, c, b, a, w) else C_OFF)
+            pygame.draw.lines(s, col, False, [(sx + 9, sy), (ex, sy), (ex, ty), (tx - 7, ty)], 3)
+        # source rails
+        for key in RAILS:
+            x, y = NODE[key]
+            v = sv(key, c, b, a, w)
+            self.rtxt(s, LBL[key], x - 16, y - 8, self.f_s)
+            pygame.draw.circle(s, C_ON if v else (23, 34, 56), (x, y), 9)
+            pygame.draw.circle(s, C_ON if v else C_BORDER, (x, y), 9, 2)
+        # AND gates
+        for label, (p1, p2, gk) in (("AND 1", ("a1", "a2", "g1")), ("AND 2", ("b1", "b2", "g2"))):
+            gx, gy = NODE[gk]
+            box = pygame.Rect(210, gy - 32, 64, 64)
+            v = sv(gk, c, b, a, w)
+            for p in (p1, p2): pygame.draw.line(s, C_BORDER, PIN_POS[p], (box.x, PIN_POS[p][1]), 2)
+            pygame.draw.line(s, C_ON if v else C_OFF, (box.right, gy), (gx, gy), 3)
+            pygame.draw.rect(s, C_GATE, box, border_top_right_radius=30, border_bottom_right_radius=30)
+            pygame.draw.rect(s, C_BORDER, box, 2, border_top_right_radius=30, border_bottom_right_radius=30)
+            self.ctxt(s, label, box.centerx - 4, box.centery - 7, self.f_s)
+            pygame.draw.circle(s, C_ON if v else (23, 34, 56), (gx, gy), 9)
+            pygame.draw.circle(s, C_ON if v else C_BORDER, (gx, gy), 9, 2)
+        # OR gate + segment lamp
+        res = out(w, c, b, a)
+        for p in ("o1", "o2", "o3"): pygame.draw.line(s, C_BORDER, PIN_POS[p], (398, PIN_POS[p][1]), 2)
+        pygame.draw.line(s, C_ON if res else C_OFF, (452, 270), (476, 270), 3)
+        orp = [(392, 238), (428, 238), (456, 270), (428, 302), (392, 302), (402, 270)]
+        pygame.draw.polygon(s, C_GATE, orp)
+        pygame.draw.polygon(s, C_BORDER, orp, 2)
+        self.ctxt(s, "OR", 426, 263, self.f_s)
+        pygame.draw.circle(s, C_ON if res else (23, 34, 56), (488, 270), 12)
+        pygame.draw.circle(s, C_ON if res else C_BORDER, (488, 270), 12, 2)
+        self.ctxt(s, str(res), 488, 263, self.f_s, (6, 17, 26) if res else muted)
+        self.ctxt(s, "seg %s" % seg, 488, 288, self.f_s)
+        # pins + cursors
+        for pin in PINS:
+            pygame.draw.circle(s, C_ON if pin in w else C_PANEL, PIN_POS[pin], 6)
+            pygame.draw.circle(s, C_ON if pin in w else muted, PIN_POS[pin], 6, 2)
+        if not done:
+            if cur_pin: pygame.draw.circle(s, C_SEL, PIN_POS[cur_pin], 11, 3)
+            if picking and w.get(cur_pin): pygame.draw.circle(s, C_SEL, NODE[w[cur_pin]], 14, 3)
+            if self.msel: pygame.draw.circle(s, C_MOUSE, NODE[self.msel], 14, 3)
+        # live 7-segment output for the switch input
+        k = self.code3()
+        pygame.draw.rect(s, (7, 13, 23), (528, 172, 84, 132), border_radius=6)
+        draw_set(s, self.on_of(k), 544, 184, 52, 92, (38, 54, 76))
+        self.ctxt(s, "INPUT %d%d%d" % (c, b, a), 570, 312, self.f_s)
+        self.ctxt(s, "SW2 SW1 SW0", 570, 332, self.f_tiny, muted)
+        self.ctxt(s, ("should show %s" % CHAR_NAME[k]) if k in CHAR_NAME else "(never occurs)", 570, 350, self.f_tiny, muted)
+        if done: return "Decoder verified. Leave through the exit door."
+        if picking: return "U/D change source | BTNC confirm | hold BTNC = cancel"
+        return "U/D pin | L/R segment | BTNC wire or press | SW2-SW0 test input | mouse also works"
 
     # ---------------- drawing: overlays ----------------
     def draw_cards(self, ui, s):
@@ -745,25 +905,26 @@ class Game:
         self.draw_box(s, pygame.Rect(90, 80, 460, 340))
         self.ctxt(s, "INVENTORY  (SW15 / key I to close)", 320, 94, self.f_m)
         counts = [self.hh, self.hs, self.undo, self.freeze]
-        names = ["Hint (hard)", "Hint (smart)", "Undo", "Freeze"]
+        names = ["Hint (wiring)", "Hint (smart)", "Undo", "Freeze"]
         for i in range(4):
-            r = pygame.Rect(110 + i * 108, 140, 100, 90)
+            r = pygame.Rect(110 + i * 108, 130, 100, 90)
             pygame.draw.rect(s, (255, 230, 120) if i == self.inv_cur else (70, 74, 100), r, border_radius=8)
             col = (20, 20, 20) if i == self.inv_cur else (255, 255, 255)
             self.ctxt(s, names[i], r.centerx, r.y + 14, self.f_s, col)
             self.ctxt(s, "x%d" % counts[i], r.centerx, r.y + 46, self.f_l, col)
-        self.txt(s, "Armor x%d   (shields wrong code penalty)" % self.armor, 110, 260, self.f_s)
-        self.txt(s, "Armor shards %d / 2   (2 shards = 1 armor)" % self.shard, 110, 286, self.f_s)
-        self.txt(s, "Speed Boost: %s   (used in Stage 3)" % ("yes" if self.boost else "no"), 110, 312, self.f_s)
-        self.txt(s, "Slow: %s" % (("%.0f s left" % self.slow_t) if self.slow_t > 0 else "off"), 110, 338, self.f_s)
-        self.ctxt(s, "L/R select   BTNC use", 320, 380, self.f_s, (170, 200, 255))
+        have = [PART_NAME[p] for p in PART_NAME if self.parts[p]]
+        self.txt(s, "Parts %d / 4:  %s" % (len(have), ", ".join(have) or "none yet"), 110, 240, self.f_s, (150, 255, 170))
+        self.txt(s, "Armor x%d   (shields a failed QA penalty)" % self.armor, 110, 268, self.f_s)
+        self.txt(s, "Armor shards %d / 2   (2 shards = 1 armor)" % self.shard, 110, 294, self.f_s)
+        self.txt(s, "Speed Boost: %s   (used in Stage 3)" % ("yes" if self.boost else "no"), 110, 320, self.f_s)
+        self.txt(s, "Slow: %s" % (("%.0f s left" % self.slow_t) if self.slow_t > 0 else "off"), 110, 346, self.f_s)
+        self.ctxt(s, "L/R select   BTNC use", 320, 386, self.f_s, (170, 200, 255))
 
     def draw_notebook(self, s):
         self.draw_box(s, pygame.Rect(60, 50, 520, 420))
         self.ctxt(s, "NOTEBOOK  (SW14 / key N to close)", 320, 62, self.f_m)
-        self.txt(s, "Answers Logged: A = %s   B = %s   C = %s" % (
-            ANS_A if self.solved[0] else "?", ANS_B if self.solved[1] else "?", ANS_C if self.solved[3] else "?"),
-            80, 100, self.f_s, (255, 230, 120))
+        self.txt(s, "Parts found: %d / 4     QA rounds passed: %d / %d" % (sum(self.parts.values()), self.rnd, ROUNDS),
+                 80, 100, self.f_s, (255, 230, 120))
         if self.career is not None:
             self.txt(s, "Career card: %s" % CAREERS[self.career][0], 80, 120, self.f_s, CAREERS[self.career][1])
         y = 148
@@ -776,21 +937,23 @@ class Game:
 
     def draw_help(self, ui, s):
         ov = pygame.Surface((UW, UH), pygame.SRCALPHA); ov.fill((0, 0, 0, 215)); ui.blit(ov, (0, 0))
-        self.draw_box(s, pygame.Rect(30, 60, 580, 420))
-        self.ctxt(s, "STAGE 2: INTERNSHIP - HOW TO PLAY", 320, 74, self.f_l)
+        self.draw_box(s, pygame.Rect(30, 50, 580, 440))
+        self.ctxt(s, "STAGE 2: INTERNSHIP - HOW TO PLAY", 320, 64, self.f_l)
         rows = [("Move", "W A S D / arrows   (BTNU BTND BTNL BTNR)"),
                 ("Interact / confirm", "Space   (BTNC tap)"),
-                ("Back", "hold Space 0.8 s, or Esc   (BTNC hold)"),
-                ("Switches", "keys 1-8 = SW0-SW7, or click them below"),
+                ("Back / cancel", "hold Space 0.8 s, or Esc   (BTNC hold)"),
+                ("Test input C B A", "keys 3 2 1 = SW2 SW1 SW0, or click them below"),
                 ("Inventory", "I   (SW15)"),
                 ("Notebook", "N   (SW14)"),
                 ("This help", "H"),
-                ("Debug", "F1-F4 form, F5 solve next, F6 collision")]
+                ("Debug", "F1-F4 form, F5 skip a step, F6 collision")]
         for i, (a, b) in enumerate(rows):
-            self.txt(s, a, 54, 128 + i * 30, self.f_s, (255, 230, 120))
-            self.txt(s, b, 220, 128 + i * 30, self.f_s)
-        self.blit_wrap(s, "Solve the 5 puzzles, collect cards, then open the exit door.", 54, 380, 530, self.f_m, (170, 200, 255))
-        self.ctxt(s, "Press Space to start", 320, 442, self.f_m, (150, 255, 170))
+            self.txt(s, a, 54, 114 + i * 29, self.f_s, (255, 230, 120))
+            self.txt(s, b, 220, 114 + i * 29, self.f_s)
+        self.blit_wrap(s, "Search the room for 4 logic parts, bring them to the decoder bench, wire the "
+                          "7-segment decoder through 3 QA rounds, then leave by the exit door. "
+                          "A failed QA test costs 1 heart.", 54, 356, 532, self.f_s, (170, 200, 255), 22)
+        self.ctxt(s, "Press Space to start", 320, 452, self.f_m, (150, 255, 170))
 
     def draw_hud(self, ui):
         for i in range(3):
@@ -800,7 +963,9 @@ class Game:
             pygame.draw.rect(ui, (80, 180, 255), (96, 12, 18, 22), border_radius=4)
             self.txt(ui, "x%d" % self.armor, 118, 14, self.f_s, (120, 200, 255))
         if self.slow_t > 0:
-            self.txt(ui, "SLOW %.0fs" % self.slow_t, 180, 14, self.f_m, (255, 150, 80))
+            self.txt(ui, "SLOW %.0fs" % self.slow_t, 16, 40, self.f_s, (255, 150, 80))
+        self.rtxt(ui, "Parts %d/4" % sum(self.parts.values()), UW - 14, 10, self.f_s, (150, 255, 170))
+        self.rtxt(ui, "QA %d/%d" % (self.rnd, ROUNDS), UW - 14, 28, self.f_s, (255, 230, 120))
 
     def draw_toast(self, ui):
         if time.time() < self.toast[1]:
@@ -812,13 +977,8 @@ class Game:
     def seg_right(self):
         if self.state == "clear": return "PA55"
         if self.state == "over": return "dEAd"
-        if self.mode == "closeup" and self.cur and not self.deck["active"]:
-            k = self.cur.kind
-            if k in ("whiteboard", "dcare") and self.page == 1: return str(self.code3())
-            if k == "terminal" and self.page == 1: return str(self.p2[self.p2_cur])
-            if k == "kmap" and self.page == 1: return str(self.p3_sel)
-            if k == "door": return "".join(str(d) for d in self.door_digits[:2 if self.door_layer == 0 else 5])
-            if k == "pc" and not self.solved[4]: return "".join(str(v) for v in self.p5)
+        if self.wiring_live() and not self.deck["active"]:
+            return "%d%d%d " % bits(self.code3())            # last digit is replaced by the live decoder output
         return ""
 
     def draw_panel(self, scr):
@@ -828,7 +988,8 @@ class Game:
         leds = [False] * 16
         for i in range(3): leds[i] = self.hearts > i
         leds[3] = self.armor > 0
-        for i in range(5): leds[4 + i] = self.solved[i]
+        for i, p in enumerate(PART_NAME): leds[4 + i] = self.parts[p]
+        for i in range(ROUNDS): leds[8 + i] = self.rnd > i
         leds[11] = self.slow_t > 0
         for i in range(16):
             pygame.draw.circle(scr, (255, 70, 60) if leds[i] else (70, 40, 40), (sw_cx(i), y0 + 18), 7)
@@ -837,17 +998,20 @@ class Game:
             pygame.draw.rect(scr, (230, 230, 230) if self.sw[i] else (80, 80, 90), r, border_radius=5)
             self.ctxt(scr, "SW%d" % i, r.centerx, r.y + 11, self.f_tiny, (20, 20, 20) if self.sw[i] else (200, 200, 200))
         text = ("H%d" % max(0, self.hearts)) + self.seg_right().rjust(6)[-6:]
-        for i, ch in enumerate(text):
-            draw_digit(scr, ch, 14 + i * 40, y0 + 26, 32, 52)
-        self.txt(scr, "7-SEG: H3 = 3 hearts | right = live value", 14, y0 + 84, self.f_tiny, (170, 170, 190))
-        self.txt(scr, "LED: 0-2 hearts  3 armor  4-8 puzzles  11 slow", 360, y0 + 78, self.f_tiny, (140, 140, 160))
+        glyphs = [SEG_MAP.get(ch, "g") for ch in text]
+        if self.state == "play" and self.wiring_live() and not self.deck["active"]:
+            glyphs[7] = self.on_of(self.code3())
+        for i, on in enumerate(glyphs):
+            draw_set(scr, on, 14 + i * 40, y0 + 26, 32, 52)
+        self.txt(scr, "7-SEG: H3 = hearts | at the bench: C B A + decoder output", 14, y0 + 84, self.f_tiny, (170, 170, 190))
+        self.txt(scr, "LED: 0-2 hearts  3 armor  4-7 parts  8-10 QA rounds  11 slow", 360, y0 + 78, self.f_tiny, (140, 140, 160))
         self.txt(scr, "Move WASD | BTNC = Space (hold = back) | SW0-7 = keys 1-8 or click | I inventory | N notebook | H help",
                  360, y0 + 94, self.f_tiny, (170, 170, 190))
         self.txt(scr, "Form: %s" % FORM_NAMES[self.form], 14, y0 + 98, self.f_tiny, (140, 140, 160))
 
     def draw(self, ui, screen):
         ui.fill((18, 20, 26))
-        s = ui.subsurface(pygame.Rect(160, 0, 640, UH))
+        s = ui.subsurface(pygame.Rect(CU_X, 0, CU_W, UH))
         if self.mode == "closeup" and self.cur: self.draw_closeup(ui, s)
         else: self.draw_world(ui)
         self.draw_hud(ui)
