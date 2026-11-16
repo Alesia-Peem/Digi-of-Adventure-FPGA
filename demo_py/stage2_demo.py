@@ -6,6 +6,7 @@
 #   ids: whiteboard chart cabinet toolbox drawer bench door      Missing files -> placeholders, the game still runs.
 import copy, itertools, math, os, sys, time
 import pygame
+from player_sprite import PlayerSprite
 
 SCR_W, SCR_H, PANEL_H = 1152, 648, 112      # window: game area 16:9 + virtual board panel
 UW, UH = 960, 540                           # internal UI surface (16:9), scaled up to the window
