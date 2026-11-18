@@ -213,23 +213,6 @@ class Game:
         self.form = 0
         self.reset_stage(True)
 
-        # ---- เชื่อมต่อกับ Demo Hub ----
-    def start(self, handoff=None):
-        # เริ่มต้น/รีเซ็ตเกมใหม่ทั้งหมดเมื่อถูกเรียกจากฮับกลาง 
-        # (handoff คือข้อมูลที่ส่งต่อมาจากด่านก่อนหน้า เช่น หัวใจ, ชุดตัวละคร)
-        self.reset_stage(True)
-        self.show_help = False
-
-    def get_handoff(self):
-        # รวบรวมข้อมูลสถานะปัจจุบันของเกม (เช่น จำนวนหัวใจ, ฟอร์มชุด, เกราะ)
-        # เพื่อส่งต่อให้ด่านถัดไปนำไปใช้ต่อ
-        return {"hearts": getattr(self, "hearts", 3), "form": getattr(self, "form", 0), "armor": getattr(self, "armor", 0)}
-
-    def get_progress(self):
-        # เช็กความคืบหน้าของด่าน เพื่อให้ฮับรู้ว่าเล่นถึงไหนแล้ว 
-        # (ถ้าเคลียร์ด่านแล้วคืนค่า 4, ถ้ายังไม่เคลียร์คืนค่า 0)
-        return 4 if getattr(self, "state", "") == "clear" else 0
-
 
     def reset_stage(self, full=False):
         if full:
