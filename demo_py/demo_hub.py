@@ -22,9 +22,9 @@ import pygame
 
 DEMO_MENU = True                     # False = hub works but no menu is drawn
 REGISTRY = [                         # (tab label, python module, class name) - edit to match your files
-    ("Stage 1", "stage1", "Game"),
-    ("Stage 2", "stage2", "Game"),
-    ("Stage 3", "stage3", "Game"),
+    ("Stage 1", "stage1_demo", "Game"),
+    ("Stage 2", "stage2_demo", "Game"),
+    ("Stage 3", "stage3_demo", "Game"),
 ]
 WINDOW = (1152, 760)
 UI_SIZE = (960, 540)
@@ -120,7 +120,7 @@ class Hub:
                   bool(getattr(g, "debug", False)), hasattr(g, "toggle_debug")),
                  ("button", "Restart stage", (lambda: (g.start(), self.close())), False, True)])
             row([("button", "Skip to next stage >>", self.next_stage, False, True)])
-        row([("sub", "F10 or the menu button: open / close. Game pauses.", None, False, True)], 20)
+        row([("sub", "F10 or the menu button", None, False, True)], 20)
         self.panel = pygame.Rect(x0, 46, w, y - 46 + 6)
         return items
 
