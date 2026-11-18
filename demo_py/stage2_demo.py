@@ -438,6 +438,20 @@ class Game:
             self.set_anchor(o)
         self.reset_stage(True)
 
+# ---- รองรับการเชื่อมต่อกับ Demo Hub (สำหรับไฟล์เพื่อน) ----
+    def start(self, handoff=None):
+        # คำสั่งสำหรับเริ่มด่านของเพื่อน (สามารถใส่โค้ดรีเซ็ตเกมของเพื่อนไว้ข้างในนี้ได้)
+        # ปล่อยว่างไว้ (pass) ก่อนก็ได้ เพื่อป้องกันไม่ให้ฮับสั่งงานแล้ว error
+        pass
+
+    def get_handoff(self):
+        # ส่งค่าข้อมูลข้ามด่าน (ถ้าด่านเพื่อนไม่มีระบบส่งต่อ ให้คืนค่าเป็น dict ว่าง {})
+        return {}
+
+    def get_progress(self):
+        # รายงานความคืบหน้าของด่านเพื่อน (คืนค่า 0 เป็นค่าเริ่มต้น)
+        return 0
+
     def make_breadboard(self):
         s = pygame.Surface((928, 384))
         s.fill((226, 222, 208))
