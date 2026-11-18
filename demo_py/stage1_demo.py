@@ -184,7 +184,7 @@ def sw_cx(i):
 
 class Game:
     # ---- demo hub interface (only used by demo_hub.py) ----
-    POINTS = [("start", "Start of stage (card round 1)"),
+    CHECKPOINTS = [("start", "Start of stage (card round 1)"),
                    ("r2", "3 puzzles answered (card round 2)"),
                    ("r3", "All 5 puzzles answered (card round 3)"),
                    ("door", "All cards done, at the door"),
@@ -216,11 +216,12 @@ class Game:
         # ---- เชื่อมต่อกับ Demo Hub ----
     def start(self, handoff=None):
         # เริ่มต้น/รีเซ็ตเกมใหม่ทั้งหมดเมื่อถูกเรียกจากฮับกลาง 
+        # (handoff คือข้อมูลที่ส่งต่อมาจากด่านก่อนหน้า เช่น หัวใจ, ชุดตัวละคร)
         self.reset_stage(True)
         self.show_help = False
 
     def get_handoff(self):
-        # รวบรวมข้อมูลสถานะปัจจุบันของเกม (เช่นCHECK จำนวนหัวใจ, ฟอร์มชุด, เกราะ)
+        # รวบรวมข้อมูลสถานะปัจจุบันของเกม (เช่น จำนวนหัวใจ, ฟอร์มชุด, เกราะ)
         # เพื่อส่งต่อให้ด่านถัดไปนำไปใช้ต่อ
         return {"hearts": getattr(self, "hearts", 3), "form": getattr(self, "form", 0), "armor": getattr(self, "armor", 0)}
 

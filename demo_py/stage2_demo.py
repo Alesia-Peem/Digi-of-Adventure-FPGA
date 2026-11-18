@@ -409,6 +409,96 @@ def wire_pts(a, b):
 
 
 class Game:
+    
+        # ---- demo hub interface (for stage 2) ----
+    CHECKPOINTS = [
+        ("start", "Start of stage"),
+        ("parts", "All 4 parts collected"),
+        ("bench", "Decoder bench powered on"),
+        ("qa1", "Passed QA round 1"),
+        ("qa3", "All 3 QA rounds cleared (Door open)"),
+        ("clear", "Stage 2 cleared")
+    ]
+    ACTIONS = [
+        ("give_parts", "Collect all 4 parts"),
+        ("give_armor", "Give 1 Armor"),
+        ("wrong_qa", "Trigger QA failure penalty")
+    ]
+
+    def start(self, handoff=None):
+        self.reset_stage(True)
+        self.show_help = False
+
+    def get_handoff(self):
+        return {
+            "hearts": getattr(self, "hearts", 3),
+            "form": getattr(self, "form", 0),
+            "armor": getattr(self, "armor", 0),
+            "boost": getattr(self, "boost", False),
+            "shards": getattr(self, "shard", 0)
+        }
+
+    def get_progress(self):
+        if getattr(self, "state", "") == "clear":
+            return 5
+        # เช็กความคืบหน้าตามกลไกของ Stage 2
+        parts_collected = len(getattr(self, "parts", {})) >= 4
+        qa_rnd = getattr(self, "rnd", 0)
+        if qa_rnd >= 3:
+            return 4
+        if qa_rnd >= 1:
+            return 3
+        if parts_collected:
+            # สมมติถ้าเปิดบอร์ด/เดคโคเดอร์แล้ว ให้ดันขึ้นไปขั้น 2
+            return 2 if getattr(self, "page", 0) > 0 else 1
+        return 0
+
+    def set_hearts(self, n):
+        self.hearts = max(1, min(3, n))
+        if getattr(self, "state", "") == "over":
+            self.state = "play"
+
+    def set_form(self, i):
+        self.form = max(0, min(3, i))
+
+    def toggle_debug(self):
+        self.debug = not getattr(self, "debug", False)
+
+    def jump_to(self, key):
+        self.reset_stage(True)
+        self.show_help = False
+        if key == "start":
+            return
+        if key == "clear":
+            self.state = "clear"
+            return
+        # จำลองการกระโดดข้ามขั้นตอนตาม Checkpoint
+        if key in ("parts", "bench", "qa1", "qa3"):
+            # บังคับให้เก็บชิ้นส่วนครบ 4 ชิ้น
+            if hasattr(self, "parts"):
+                self.parts = {"and1": True, "and2": True, "or": True, "not": True}
+        if key in ("bench", "qa1", "qa3"):
+            self.page = 1  # เปิดหน้าจอเดคโคเดอร์
+        if key in ("qa1", "qa3"):
+            self.rnd = 1   # ผ่านรอบที่ 1
+        if key == "qa3":
+            self.rnd = 3   # ผ่านครบ 3 รอบ ปลดล็อกประตู
+
+    def do_action(self, key):
+        if key == "give_parts":
+            if hasattr(self, "parts"):
+                self.parts = {"and1": True, "and2": True, "or": True, "not": True}
+                self.say("[DEBUG] Collected all 4 parts")
+        elif key == "give_armor":
+            if hasattr(self, "armor"):
+                self.armor = min(3, self.armor + 1)
+                self.say("Armor +1")
+        elif key == "wrong_qa":
+            # จำลองการตอบคำถามผิดเพื่อทดสอบระบบหักหัวใจ/เกราะ
+            if hasattr(self, "hearts"):
+                self.hearts = max(0, self.hearts - 1)
+                self.say("[DEBUG] Triggered QA penalty (-1 heart)")
+    
     def __init__(self):
         self.f_tiny = pygame.font.Font(None, 15)
         self.f_s = pygame.font.Font(None, 20)
