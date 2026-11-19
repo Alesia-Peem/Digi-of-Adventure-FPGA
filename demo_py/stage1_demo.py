@@ -54,9 +54,9 @@ BLOCKERS = [                                   # floor footprints (x, y, w, h)
     pygame.Rect(815, 250, 140, 120),           # shelf
     pygame.Rect(450, 440, 125, 120),           # lockers (left wall)
     pygame.Rect(100, 880, 200, 125),           # low cabinet (bottom-left)
-    pygame.Rect(640, 435, 710, 150),           # table row 1 (back)
-    pygame.Rect(520, 615, 885, 170),           # table row 2
-    pygame.Rect(345, 860, 1125, 170),          # table row 3 (front)
+    pygame.Rect(660, 420, 650, 120),           # table row 1 (back)
+    pygame.Rect(520, 615, 850, 150),           # table row 2
+    pygame.Rect(380, 860, 1080, 170),          # table row 3 (front)
     pygame.Rect(1490, 525, 225, 250),          # teacher desk
 ]
 SPAWN = (1300.0, 405.0)
