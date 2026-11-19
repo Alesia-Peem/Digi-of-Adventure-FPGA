@@ -8,6 +8,8 @@
 import itertools, math, os, sys, time
 import pygame
 import player_sprite
+import card_assets
+
 
 SCR_W, SCR_H, PANEL_H = 1152, 648, 112      # window: game area 16:9 + virtual board panel
 UW, UH = 960, 540                           # internal UI surface (16:9), scaled up to the window
@@ -210,6 +212,7 @@ class Game:
         self.standalone = True          # demo hub sets this to False
         self.form = 0
         self.reset_stage(True)
+        self.card_art = card_assets.CardAssets(ASSET_DIR, (170, 170))
 
 
     def reset_stage(self, full=False):
@@ -994,18 +997,30 @@ class Game:
             career_name, career_col = "", (80, 85, 100)
 
         for pos in range(3):
-            r = pygame.Rect(80 + pos * 180, 80, 140, 200)
-            if d["face"] == pos:
-                col = CAREERS[d["perm"][pos]][1] if d["round"] == 1 else career_col
-                pygame.draw.rect(s, col, r, border_radius=10)
-                self.ctxt(s, d["name"], r.centerx, r.y + 90, self.f_m, (255, 255, 255))
-            elif d["round"] == 1:
-                pygame.draw.rect(s, (80, 85, 100), r, border_radius=10)
-                self.ctxt(s, "?", r.centerx, r.y + 90, self.f_l, (200, 200, 200))
-            else:
-                pygame.draw.rect(s, career_col, r, border_radius=10)
-                sym = SYMBOLS[self.career][pos] if self.career is not None else career_name
-                self.ctxt(s, sym, r.centerx, r.y + 90, self.f_m, (255, 255, 255))
+            r = pygame.Rect(65 + pos * 180, 95, 170, 170)
+            idx = d["perm"][pos]
+            revealed = (d["face"] == pos)
+            fb_col = CAREERS[idx][1] if (d["round"] == 1 and revealed) else (career_col if d["round"] > 1 else (80, 85, 100))
+
+            drew_img = self.card_art.draw_card(
+                s, r, d["round"], self.career, pos, revealed, slot_idx=idx, fallback_color=fb_col
+            )
+
+            # ถ้าไม่มีรูปให้ขึ้นข้อความเดิมแทน และถ้ารอบ 2+ เปิดแล้วให้แสดงชื่อไอเทมบนแถบดำโปร่งใส
+            if not drew_img:
+                if revealed:
+                    self.ctxt(s, d["name"], r.centerx, r.y + 90, self.f_m, (255, 255, 255))
+                elif d["round"] == 1:
+                    self.ctxt(s, "?", r.centerx, r.y + 90, self.f_l, (200, 200, 200))
+                else:
+                    sym = SYMBOLS[self.career][pos] if self.career is not None else career_name
+                    self.ctxt(s, sym, r.centerx, r.y + 90, self.f_m, (255, 255, 255))
+            elif revealed and d["round"] > 1:
+                tag = pygame.Surface((r.w, 34), pygame.SRCALPHA)
+                tag.fill((0, 0, 0, 180))
+                s.blit(tag, (r.x, r.bottom - 42))
+                self.ctxt(s, d["name"], r.centerx, r.bottom - 34, self.f_s, (255, 230, 120))
+
             if d["face"] is None and pos == d["cursor"]:
                 pygame.draw.rect(s, (255, 255, 255), r.inflate(10, 10), 4, border_radius=12)
 

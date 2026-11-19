@@ -8,6 +8,7 @@
 import copy, itertools, math, os, sys, time
 from collections import deque
 import pygame
+import card_assets
 
 
 SCR_W, SCR_H, PANEL_H = 1152, 648, 112      # window: game area 16:9 + virtual board panel
@@ -59,6 +60,7 @@ class PlayerSprite:
         self.h, self.cache = height, {}
         self.dir, self.t = "front", 0.0
         self.moving = False
+        
 
     def reset(self):
         self.dir, self.t, self.moving = "front", 0.0, False
@@ -462,6 +464,21 @@ def wire_pts(a, b):
 
 
 class Game:
+    # ---- demo hub interface (only used by demo_hub.py) ----
+    CHECKPOINTS = [
+        ("start", "Start of stage (card round 1)"),
+        ("r2", "9/18 parts found (card round 2)"),
+        ("parts", "All 18 parts found (ready to wire)"),
+        ("r3", "2/3 QA passed (card round 3)"),
+        ("door", "All 3 QA passed (door unlocked)"),
+        ("clear", "Stage 2 cleared"),
+    ]
+    ACTIONS = [
+        ("auto_wire", "Auto-wire breadboard (correct)"),
+        ("skill_ready", "Charge Workshop-shirt skill"),
+        ("armor", "Give 1 Armor"),
+    ]
+    
     def __init__(self):
         self.f_tiny = pygame.font.Font(None, 15)
         self.f_s = pygame.font.Font(None, 20)
@@ -491,6 +508,11 @@ class Game:
         for o in OBJS + [NPC_OBJ] + ITEM_SPOTS + HINT_SPOTS:
             self.set_anchor(o)
         self.reset_stage(True)
+        self.card_art = card_assets.CardAssets(ASSET_DIR, (170, 170))
+        self.debug = False
+        self.show_help = True
+        self.standalone = True          # <-- เพิ่มบรรทัดนี้ (demo_hub จะปรับเป็น False เอง)
+        self.form = 1
 
     def make_breadboard(self):
         s = pygame.Surface((928, 384))
@@ -1511,25 +1533,46 @@ class Game:
         d = self.deck
         ov = pygame.Surface((UW, UH), pygame.SRCALPHA); ov.fill((0, 0, 0, 205)); ui.blit(ov, (0, 0))
         self.ctxt(s, "PICK A CARD  (ROUND %d)" % d["round"], 320, 30, self.f_l)
+
         for pos in range(3):
-            r = pygame.Rect(80 + pos * 180, 80, 140, 200)
+            r = pygame.Rect(65 + pos * 180, 95, 170, 170)
             idx = d["perm"][pos]
             item = CARD_ITEMS[d["round"]][idx]
+            item_name = ITEM_TEXT[item][0]
+            revealed = (d["face"] == pos)
+
             if d["round"] == 1:
-                if d["face"] == pos:
-                    pygame.draw.rect(s, CAREERS[idx][1], r, border_radius=10)
-                    self.ctxt(s, CAREERS[idx][0], r.centerx, r.y + 60, self.f_m)
-                    self.ctxt(s, ITEM_TEXT[item][0], r.centerx, r.y + 120, self.f_s)
-                else:
-                    pygame.draw.rect(s, (80, 85, 100), r, border_radius=10)
-                    self.ctxt(s, "?", r.centerx, r.y + 90, self.f_l, (200, 200, 200))
+                fb_col = CAREERS[idx][1] if revealed else (80, 85, 100)
             else:
-                pygame.draw.rect(s, CAREERS[self.career][1], r, border_radius=10)
-                self.ctxt(s, SYMBOLS[self.career][pos], r.centerx, r.y + 60, self.f_m)
-                if d["face"] == pos:
-                    self.ctxt(s, ITEM_TEXT[item][0], r.centerx, r.y + 120, self.f_s)
+                fb_col = CAREERS[self.career][1] if self.career is not None else (80, 85, 100)
+
+            drew_img = self.card_art.draw_card(
+                s, r, d["round"], self.career, pos, revealed, slot_idx=idx, fallback_color=fb_col
+            )
+
+            # Fallback ข้อความกรณีหารูปไม่เจอ
+            if not drew_img:
+                if d["round"] == 1:
+                    if revealed:
+                        self.ctxt(s, CAREERS[idx][0], r.centerx, r.y + 60, self.f_m)
+                        self.ctxt(s, item_name, r.centerx, r.y + 120, self.f_s)
+                    else:
+                        self.ctxt(s, "?", r.centerx, r.y + 90, self.f_l, (200, 200, 200))
+                else:
+                    if self.career is not None:
+                        self.ctxt(s, SYMBOLS[self.career][pos], r.centerx, r.y + 60, self.f_m)
+                    if revealed:
+                        self.ctxt(s, item_name, r.centerx, r.y + 120, self.f_s)
+            # ถ้ามีรูปแล้ว และเป็นรอบ 2+ ที่เปิดการ์ด ให้แสดงชื่อไอเทมบนแถบดำโปร่งใส
+            elif revealed and d["round"] > 1:
+                tag = pygame.Surface((r.w, 34), pygame.SRCALPHA)
+                tag.fill((0, 0, 0, 180))
+                s.blit(tag, (r.x, r.bottom - 42))
+                self.ctxt(s, item_name, r.centerx, r.bottom - 34, self.f_s, (255, 230, 120))
+
             if d["face"] is None and pos == d["cursor"]:
                 pygame.draw.rect(s, (255, 255, 255), r.inflate(10, 10), 4, border_radius=12)
+
         if d["face"] is not None:
             name, desc = ITEM_TEXT[CARD_ITEMS[d["round"]][d["perm"][d["face"]]]]
             pygame.draw.rect(s, (30, 35, 45), (60, 310, 520, 90), border_radius=8)
@@ -1538,7 +1581,7 @@ class Game:
             self.ctxt(s, "BTNC: continue", 320, 420, self.f_m, (170, 200, 255))
         else:
             self.ctxt(s, "L/R choose   BTNC pick", 320, 360, self.f_m, (170, 200, 255))
-
+    
     def draw_inventory(self, s):
         self.draw_box(s, pygame.Rect(90, 80, 460, 340))
         self.ctxt(s, "INVENTORY  (SW15 / key I to close)", 320, 94, self.f_m)
