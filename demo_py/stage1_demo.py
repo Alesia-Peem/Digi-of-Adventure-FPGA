@@ -54,10 +54,10 @@ BLOCKERS = [                                   # floor footprints (x, y, w, h)
     pygame.Rect(815, 250, 140, 120),           # shelf
     pygame.Rect(450, 440, 125, 120),           # lockers (left wall)
     pygame.Rect(100, 880, 200, 125),           # low cabinet (bottom-left)
-    pygame.Rect(640, 435, 710, 170),           # table row 1 (back)
-    pygame.Rect(520, 615, 885, 245),           # table row 2
-    pygame.Rect(345, 880, 1160, 130),          # table row 3 (front)
-    pygame.Rect(1470, 565, 225, 290),          # teacher desk
+    pygame.Rect(640, 435, 710, 150),           # table row 1 (back)
+    pygame.Rect(520, 615, 885, 170),           # table row 2
+    pygame.Rect(345, 860, 1125, 170),          # table row 3 (front)
+    pygame.Rect(1490, 525, 225, 250),          # teacher desk
 ]
 SPAWN = (1300.0, 405.0)
 
@@ -108,15 +108,14 @@ class Obj:
 
 
 OBJS = [
-    Obj("whiteboard", "whiteboard", "Whiteboard", 400, 650, 160, (165, 180, 235, 510)),
+    Obj("whiteboard", "whiteboard", "Whiteboard", 300, 580, 180, (165, 180, 235, 510)),
     Obj("paper", "paper", "Paper on the cabinet", 700, 400, 130, (640, 170, 70, 100)),
-    Obj("laptop3", "nand", "Laptop", 1270, 1048, 120, (1215, 870, 115, 115)),
-    Obj("laptop4", "twos", "Laptop", 580, 740, 150, (665, 600, 115, 95)),
-    Obj("projector", "screen", "Projector screen", 1560, 430, 120, (1600, 170, 230, 540)),
-    Obj("pc", "pc", "Teacher computer", 1520, 545, 140, (1500, 565, 70, 95)),
-    Obj("lightsw", "lightsw", "Light switch", 1150, 395, 110, (1125, 195, 26, 28)),
-    Obj("door", "door", "Exit door", 1300, 395, 130, (1210, 110, 180, 240)),
-    Obj("keypad", "door", "Door keypad", 1428, 395, 110, (1398, 175, 60, 30)),
+    Obj("laptop3", "nand", "Laptop", 1370, 920, 190, (1215, 870, 115, 115)),
+    Obj("laptop4", "twos", "Laptop", 570, 690, 150, (665, 600, 115, 95)),
+    Obj("projector", "screen", "Projector screen", 1560, 400, 120, (1600, 170, 230, 540)),
+    Obj("pc", "pc", "Teacher computer", 1540, 620, 120, (1500, 565, 70, 95)),
+    Obj("lightsw", "lightsw", "Light switch", 1150, 310, 100, (1125, 195, 26, 28)),
+    Obj("door", "door", "Exit door", 1340, 300, 120, (1210, 110, 180, 240)),
 ]
 PAGED = ("whiteboard", "paper", "nand", "twos", "pc")
 
@@ -329,6 +328,18 @@ class Game:
             self.right[0] = False
 
     # ---------------- input ----------------
+    
+    def find_near(self):
+        # ค้นหาวัตถุที่ตัวละครเดินไปยืนใกล้ๆ (รัศมี r)
+        best, bs = None, 9.0
+        for o in OBJS:
+            # คำนวณระยะห่างระหว่างตัวละครกับวัตถุ
+            score = math.hypot(self.px - o.ax, self.py - o.ay) / o.r
+            if score <= 1.0 and score < bs:
+                best, bs = o, score
+        return best
+    
+    
     def poll(self, events):
         ev = dict(up=0, down=0, left=0, right=0, tap=0, back=0)
         now = time.time()
@@ -908,11 +919,11 @@ class Game:
         self.txt(s, "Correct Pos", 445, 94, self.f_tiny, (255, 230, 120))
 
         clue_rows = [
-            ("Canva, Pinterest, Explorer", "3", "3"),
-            ("Pinterest, AppStore, X", "1", "0"),
-            ("Explorer, Facebook, Canva", "2", "1"),
-            ("AppStore, X, Facebook", "0", "0"),
-            ("Canva, AppStore, Explorer", "2", "2"),
+            ("Facebook, Explorer, Canva", "2", "0"),
+            ("Facebook, Canva, X", "1", "1"),
+            ("Canva, AppStore, Pinterest", "2", "1"),
+            ("Pinterest, AppStore, Facebook", "1", "0"),
+            ("AppStore, Explorer, Facebook", "1", "0"),
         ]
         for idx, (seq, ca, cp) in enumerate(clue_rows):
             y = 122 + idx * 35
