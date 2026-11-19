@@ -3,17 +3,12 @@
 # Flow: hunt the 18 lab parts hidden in the office (notes and screens hold hints) -> bring them to the decoder bench
 #       -> wire the 7-segment decoder on a breadboard (74HC04 / 74HC08 / 74HC32 x2 + DIP switch + resistors)
 #       -> pass 3 QA tests -> the exit door unlocks.  No in-game computers.
-# Files used (folder layout):   <project>/assets/bg.jpg   <project>/assets/player_form{0-3}_{dir}_{pose}.png
-#                               <project>/demo_py/player_sprite.py  (shared sprite helper)  + this file
+# Files used (folder layout):   <project>/assets/bg.jpg   <project>/assets/player_form{N}_{back|front|right}_{stand|stepl|stepr}.png
+#                               (left uses _left_ files if present, else mirrors right)   + this file.  player_sprite.py is no longer needed.
 import copy, itertools, math, os, sys, time
 from collections import deque
 import pygame
 
-try:
-    from player_sprite import PlayerSprite
-except ImportError:                                  # the game still runs with a placeholder character
-    PlayerSprite = None
-    print("[assets] player_sprite.py not found next to this file -> placeholder character")
 
 SCR_W, SCR_H, PANEL_H = 1152, 648, 112      # window: game area 16:9 + virtual board panel
 UW, UH = 960, 540                           # internal UI surface (16:9), scaled up to the window
@@ -53,6 +48,52 @@ def load_img(name, size=None):
 
 
 ASSET_DIR = next((d for d in ASSET_DIRS if os.path.isfile(os.path.join(d, "bg.jpg"))), ASSET_DIRS[0])
+
+class PlayerSprite:
+    """Player skin: assets/player_form{N}_{back|front|right}_{stand|stepl|stepr}.png  (left uses player_form{N}_left_* if present, else the right image mirrored).
+    Walk cycle: stand, stepl, stand, stepr.  A missing form falls back to form 1; a missing file -> placeholder box."""
+    POSES = ("stand", "stepl", "stepr")
+    STEP_S = 0.14                                    # seconds per walk frame
+
+    def __init__(self, folder, height):
+        self.h, self.cache = height, {}
+        self.dir, self.t = "front", 0.0
+        self.moving = False
+
+    def reset(self):
+        self.dir, self.t, self.moving = "front", 0.0, False
+
+    def update(self, dt, dx, dy, moving):
+        if dx: self.dir = "right" if dx > 0 else "left"
+        elif dy: self.dir = "front" if dy > 0 else "back"
+        self.moving = moving
+        self.t = self.t + dt if moving else 0.0
+
+    def stop(self):
+        self.moving, self.t = False, 0.0
+
+    def _load(self, form, d, pose):
+        key = (form, d, pose)
+        if key not in self.cache:
+            img = None
+            for f in (form, 1):                          # a form without this direction (e.g. gown) falls back to form 1
+                img = load_img("player_form%d_%s_%s.png" % (f, d, pose))
+                flip = False
+                if img is None and d == "left":          # no left picture: mirror the right one
+                    img, flip = load_img("player_form%d_right_%s.png" % (f, pose)), True
+                if img:
+                    img = pygame.transform.smoothscale(img, (max(1, round(img.get_width() * self.h / img.get_height())), self.h))
+                    if flip: img = pygame.transform.flip(img, True, False)
+                    break
+            self.cache[key] = img
+        return self.cache[key]
+
+    def image(self, form):
+        pose = "stand"
+        if self.moving:
+            pose = ("stand", "stepl", "stand", "stepr")[int(self.t / self.STEP_S) % 4]
+        return self._load(form, self.dir, pose) or self._load(form, self.dir, "stand")
+
 
 # ---------------- decoder data (same numbers as the RTL design) ----------------
 SEGS = "abcdefg"
@@ -432,7 +473,7 @@ class Game:
         self.bg = load_img("bg.jpg", (UW, UH)) or load_img("internship.jpg", (UW, UH))
         print("[assets] background:", find_asset("bg.jpg") or find_asset("internship.jpg") or
               "NOT FOUND (looked in: %s)" % ", ".join(ASSET_DIRS))
-        self.spr = PlayerSprite(ASSET_DIR, SPR_H) if PlayerSprite else None
+        self.spr = PlayerSprite(ASSET_DIR, SPR_H)
         self.npc_img, self.npc_img_sit = self.scaled("npc_stand.png", SPR_H), self.scaled("npc_sit.png", 48)
         self.cu_cache = {}
         self.bb_surf = self.make_breadboard()
@@ -891,7 +932,7 @@ class Game:
         else: self.closeup_input(ev)
 
     # ---------------- workshop-shirt skill: see the hidden parts for 10 s ----------------
-    def look(self):                      # skin drawn: the workshop shirt (form 1) from the start; gown after clearing
+    def look(self):                      # skin drawn: the workshop shirt (form 1) all the time; gown (form 2) after clearing
         return self.form
 
     def skill_ready(self):
@@ -1293,20 +1334,20 @@ class Game:
         return "BTNC: leave the lab" if done else "BTNC: try the handle"
 
     def cu_bench(self, s):                           # page 0: parts tray checklist
-        pygame.draw.rect(s, (10, 20, 10), (40, 60, 560, 400), border_radius=6)
+        pygame.draw.rect(s, (10, 20, 10), (40, 56, 560, 366), border_radius=6)
         g = (110, 255, 130)
-        self.txt(s, "DECODER BENCH - PARTS TRAY", 56, 70, self.f_mono, g)
+        self.txt(s, "DECODER BENCH - PARTS TRAY", 56, 64, self.f_mono, g)
         for i, (k, name, q) in enumerate(PARTS):
             have = self.found[k]
-            y = 100 + i * 36
+            y = 92 + i * 32
             ok = have >= q
-            pygame.draw.rect(s, (30, 70, 40) if ok else (40, 30, 30), (56, y, 528, 30), border_radius=5)
-            self.txt(s, "[OK]" if ok else "[  ]", 64, y + 6, self.f_mono, g if ok else (255, 120, 120))
-            self.txt(s, "%-27s %d / %d" % (name, have, q), 120, y + 6, self.f_mono, g if ok else (255, 170, 150))
+            pygame.draw.rect(s, (30, 70, 40) if ok else (40, 30, 30), (56, y, 528, 28), border_radius=5)
+            self.txt(s, "[OK]" if ok else "[  ]", 64, y + 5, self.f_mono, g if ok else (255, 120, 120))
+            self.txt(s, "%-27s %d / %d" % (name, have, q), 120, y + 5, self.f_mono, g if ok else (255, 170, 150))
         done = self.parts_total() >= TOTAL_PARTS
-        if self.rnd >= ROUNDS: self.txt(s, "DECODER VERIFIED.", 56, 430, self.f_mono, (255, 255, 120))
-        elif done: self.txt(s, "All parts on the bench. Ready to power on.", 56, 430, self.f_mono, (255, 255, 120))
-        else: self.txt(s, "Parts %d / %d. Search the office, read the hints." % (self.parts_total(), TOTAL_PARTS), 56, 430, self.f_mono, g)
+        if self.rnd >= ROUNDS: self.txt(s, "DECODER VERIFIED.", 56, 392, self.f_mono, (255, 255, 120))
+        elif done: self.txt(s, "All parts on the bench. Ready to power on.", 56, 392, self.f_mono, (255, 255, 120))
+        else: self.txt(s, "Parts %d / %d. Search the office, read the hints." % (self.parts_total(), TOTAL_PARTS), 56, 392, self.f_mono, g)
         return "BTNC: power on / open the breadboard"
 
     # ---------------- drawing: the breadboard ----------------

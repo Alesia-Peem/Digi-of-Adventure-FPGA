@@ -414,7 +414,6 @@ INTRO_LINES = [
 PAGED = ("whiteboard", "bench")
 SKILL_LINE = 3                                   # intro line shown while the Boss demonstrates the skill
 SKILL_SECS, SKILL_WAIT = 10.0, 120.0             # reveal time / play time before the skill can be used again
-SKILL_FORM = 1                                   # player_form1_* = workshop shirt, shown only while the skill is on
 SKILL_BTN = pygame.Rect(UW - 160, 50, 146, 28)   # on-screen skill button (map view)
 # partition rows you can walk BEHIND: (x0, x1, walk-lane bottom, y of the partition's top edge in the picture).
 # While your feet are in that lane, everything below the partition's top edge is covered by the room picture.
@@ -484,7 +483,7 @@ class Game:
         self.lfsr = (int(time.time() * 1000) & 0xFFFF) or 0xACE1
         self.debug = False
         self.show_help = True
-        self.form = 0
+        self.form = 1
         self._sw13 = False
         self._walking = False
         self.walk = make_walk_mask()
@@ -503,7 +502,7 @@ class Game:
 
     def reset_stage(self, full=False):
         if full:
-            self.form = 0
+            self.form = 1
         self.px, self.py = SPAWN
         self.mode, self.cur, self.page, self.cmsg = "map", None, 0, ""
         self.state = "play"
@@ -933,8 +932,8 @@ class Game:
         else: self.closeup_input(ev)
 
     # ---------------- workshop-shirt skill: see the hidden parts for 10 s ----------------
-    def look(self):                      # skin drawn: form 0 normally, the workshop shirt (form 1) only while the skill is on
-        return SKILL_FORM if self.skill_t > 0 else self.form
+    def look(self):                      # skin drawn: the workshop shirt (form 1) all the time; gown (form 2) after clearing
+        return self.form
 
     def skill_ready(self):
         return self.play_t >= SKILL_WAIT and not self.skill_used and self.skill_t <= 0
@@ -1335,20 +1334,20 @@ class Game:
         return "BTNC: leave the lab" if done else "BTNC: try the handle"
 
     def cu_bench(self, s):                           # page 0: parts tray checklist
-        pygame.draw.rect(s, (10, 20, 10), (40, 60, 560, 400), border_radius=6)
+        pygame.draw.rect(s, (10, 20, 10), (40, 56, 560, 366), border_radius=6)
         g = (110, 255, 130)
-        self.txt(s, "DECODER BENCH - PARTS TRAY", 56, 70, self.f_mono, g)
+        self.txt(s, "DECODER BENCH - PARTS TRAY", 56, 64, self.f_mono, g)
         for i, (k, name, q) in enumerate(PARTS):
             have = self.found[k]
-            y = 100 + i * 36
+            y = 92 + i * 32
             ok = have >= q
-            pygame.draw.rect(s, (30, 70, 40) if ok else (40, 30, 30), (56, y, 528, 30), border_radius=5)
-            self.txt(s, "[OK]" if ok else "[  ]", 64, y + 6, self.f_mono, g if ok else (255, 120, 120))
-            self.txt(s, "%-27s %d / %d" % (name, have, q), 120, y + 6, self.f_mono, g if ok else (255, 170, 150))
+            pygame.draw.rect(s, (30, 70, 40) if ok else (40, 30, 30), (56, y, 528, 28), border_radius=5)
+            self.txt(s, "[OK]" if ok else "[  ]", 64, y + 5, self.f_mono, g if ok else (255, 120, 120))
+            self.txt(s, "%-27s %d / %d" % (name, have, q), 120, y + 5, self.f_mono, g if ok else (255, 170, 150))
         done = self.parts_total() >= TOTAL_PARTS
-        if self.rnd >= ROUNDS: self.txt(s, "DECODER VERIFIED.", 56, 430, self.f_mono, (255, 255, 120))
-        elif done: self.txt(s, "All parts on the bench. Ready to power on.", 56, 430, self.f_mono, (255, 255, 120))
-        else: self.txt(s, "Parts %d / %d. Search the office, read the hints." % (self.parts_total(), TOTAL_PARTS), 56, 430, self.f_mono, g)
+        if self.rnd >= ROUNDS: self.txt(s, "DECODER VERIFIED.", 56, 392, self.f_mono, (255, 255, 120))
+        elif done: self.txt(s, "All parts on the bench. Ready to power on.", 56, 392, self.f_mono, (255, 255, 120))
+        else: self.txt(s, "Parts %d / %d. Search the office, read the hints." % (self.parts_total(), TOTAL_PARTS), 56, 392, self.f_mono, g)
         return "BTNC: power on / open the breadboard"
 
     # ---------------- drawing: the breadboard ----------------
