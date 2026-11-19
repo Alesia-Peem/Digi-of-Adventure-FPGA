@@ -130,11 +130,11 @@ HINT_SPOTS = [
     Hint("h_cork", 831, 180, "Cork board",
          "OR chips like plants: one by the water cooler on the left wall and one behind the pink beanbag. "
          "Breadboards and wires: a box on the shelf rack under the projector.", (700, 250)),
-    Hint("h_npc", 817, 300, "NPC at the black desk",
-         "NPC: 'The display? We keep spare parts in the cardboard box on the floor next to my desk. "
+    Hint("h_npc", 817, 300, "Boss at the black desk",
+         "Boss: 'The display? We keep spare parts in the cardboard box on the floor next to my desk. "
          "And that little blue box on top of the gray cabinet is a DIP switch.'", (800, 400)),
     Hint("h_note1", 551, 429, "Sticky note (bottom desk)",
-         "Hidden things have no marker: walk close and the game shows [Space] Search here. Notes, screens and boards "
+         "Hidden things have no marker: walk close to anything suspicious and press Space to search it. Notes, screens and boards "
          "around the office hold hints. Hints you read are saved in the notebook (N).", (551, 430)),
     Hint("h_note2", 666, 436, "Calendar note (bottom desk)",
          "When the Parts counter reaches 18/18, come to the bottom-right desk. The decoder bench is right here.", (666, 430)),
@@ -352,21 +352,33 @@ OBJS = [
     Obj("door", "door", "Exit door", 622, 176, (581, 53, 86, 116)),
     Obj("bench", "bench", "Decoder bench", 600, 432, (447, 420, 246, 79)),
 ]
-NPC_NAME = "Supervisor"
-NPC_OBJ = Obj("npc", "npc", "Talk to the supervisor", 815, 395, (795, 285, 50, 60))
+NPC_NAME = "Boss"
+NPC_OBJ = Obj("npc", "npc", "Talk to the Boss", 815, 395, (795, 285, 50, 60))
 NPC_SEAT = (818.0, 336.0)                        # the black chair at the desk on the right
 NPC_SPEED = 150.0
 INTRO_LINES = [
-    "Welcome to the lab, intern! I am your supervisor.",
+    "Welcome to the lab, intern! I am your Boss.",
     "Today's job: build a 7-segment decoder on the bench. It must show the characters C, P, E, -, 3 and 9.",
     "First, collect the 18 parts hidden around the office. Walk close to anything suspicious and press Space to search it. "
     "Notes, screens and boards hold hints.",
+    "You are wearing the workshop shirt you earned in the last stage. It has a skill: for 10 seconds you can SEE the hidden parts. "
+    "Watch, I will show you once!",
+    "See them glowing? Work for 2 minutes and you can use the skill one more time, whenever you like. "
+    "A SKILL button lights up at the top right (key E, or flip SW13).",
     "When you have everything, go to the decoder bench at the bottom-right desk and wire the breadboard: give every chip +5V and GND, "
     "power the DIP switch, add the pull-down and display resistors. The switches SW2-SW0 let you test your circuit.",
     "Finished? Bring it to me. I will test it and tell you if it is right or wrong. A wrong answer costs a heart!",
     "I will be at my desk on the right. Good luck!",
 ]
 PAGED = ("whiteboard", "bench")
+SKILL_LINE = 3                                   # intro line shown while the Boss demonstrates the skill
+SKILL_SECS, SKILL_WAIT = 10.0, 120.0             # reveal time / play time before the skill can be used again
+SKILL_BTN = pygame.Rect(UW - 160, 50, 146, 28)   # on-screen skill button (map view)
+# partition rows you can walk BEHIND: (x0, x1, walk-lane bottom, y of the partition's top edge in the picture).
+# While your feet are in that lane, everything below the partition's top edge is covered by the room picture.
+ROW_LANES = [(322, 636, 198, 186), (284, 656, 288, 270), (272, 690, 412, 413)]
+LANE_H = 24
+ZOOM_SECS, ZOOM_MAX = 1.5, 2.6                   # camera zoom when a part is found
 
 
 def draw_set(scr, on, x, y, w, h, off=(50, 22, 22)):
@@ -431,6 +443,7 @@ class Game:
         self.debug = False
         self.show_help = True
         self.form = 1
+        self._sw13 = False
         self._walking = False
         self.walk = make_walk_mask()
         self.reach = self.flood(SPAWN)
@@ -468,7 +481,8 @@ class Game:
         self.r_done = {1: False, 2: False, 3: False}
         self.hint_popup, self.hint_title, self.toast, self.inv_cur = None, "HINT", ("", 0), 0
         self.flash, self.over_until = 0.0, 0.0
-        self.npc = {"x": 622.0, "y": 186.0, "state": "off", "path": [], "walk": False}   # the supervisor
+        self.play_t, self.skill_t, self.skill_used, self.zoom = 0.0, 0.0, False, None
+        self.npc = {"x": 622.0, "y": 186.0, "state": "off", "path": [], "walk": False}   # the Boss
         self.talk, self.intro_started, self.cutscene = None, False, False
         if self.spr: self.spr.reset()
 
@@ -479,7 +493,7 @@ class Game:
 
     # ---------------- input ----------------
     def poll(self, events):
-        ev = dict(up=0, down=0, left=0, right=0, tap=0, back=0, click=None, rclick=None)
+        ev = dict(up=0, down=0, left=0, right=0, tap=0, back=0, skill=0, click=None, rclick=None)
         now = time.time()
         for e in events:
             if e.type == pygame.QUIT:
@@ -506,11 +520,13 @@ class Game:
                 elif k == pygame.K_i: self.sw[15] = not self.sw[15]
                 elif k == pygame.K_n: self.sw[14] = not self.sw[14]
                 elif k == pygame.K_h: self.show_help = not self.show_help
+                elif k == pygame.K_e: ev["skill"] = 1
                 elif k in (pygame.K_F1, pygame.K_F2, pygame.K_F3, pygame.K_F4): self.form = k - pygame.K_F1
                 elif k == pygame.K_F5: self.cheat_solve()
                 elif k == pygame.K_F6: self.debug = not self.debug
                 elif k == pygame.K_F7 and TEST_MODE: self.cheat_parts()
                 elif k == pygame.K_F8 and TEST_MODE: self.auto_wire()
+                elif k == pygame.K_F9 and TEST_MODE: self.play_t = SKILL_WAIT
             if e.type == pygame.KEYUP and e.key in (pygame.K_SPACE, pygame.K_RETURN):
                 if self.c_down is not None and not self.c_long:
                     ev["tap"] = 1
@@ -534,7 +550,7 @@ class Game:
         self.rec_undo()
         self.w = dict(REF)
         self.wsrc = self.msel = None
-        self.cmsg = "[TEST] Circuit wired. Now show it to the supervisor (Esc, then walk to his desk)."
+        self.cmsg = "[TEST] Circuit wired. Now show it to the Boss (Esc, then walk to his desk)."
         self.notes.append("[TEST] circuit auto-wired")
 
     def cheat_solve(self):
@@ -605,6 +621,7 @@ class Game:
     def pickup(self, sp):
         self.done_spots.add(sp.id)
         self.found[sp.part] += 1
+        self.zoom = {"t": 0.0, "x": sp.ix, "y": sp.iy}      # camera zooms to the spot
         left = TOTAL_PARTS - self.parts_total()
         self.notes.append("Found %s (%s)" % (PART_SHORT[sp.part], sp.name))
         self.say("Found: %s  (%d/%d)" % (PART_LABEL[sp.part], self.found[sp.part], PART_QTY[sp.part]))
@@ -650,7 +667,7 @@ class Game:
         if src is None: self.w.pop(sink, None)
         else: self.w[sink] = src
 
-    # ---------------- NPC: the supervisor explains, then sits down and judges the circuit ----------------
+    # ---------------- NPC: the Boss explains, then sits down and judges the circuit ----------------
     def scaled(self, name, h):
         img = load_img(name)
         return pygame.transform.smoothscale(img, (max(1, round(img.get_width() * h / img.get_height())), h)) if img else None
@@ -673,7 +690,7 @@ class Game:
             c = prev[c]
         return path[::-1]
 
-    def start_intro(self):               # after the first card: the supervisor comes in through the door
+    def start_intro(self):               # after the first card: the Boss comes in through the door
         self.intro_started, self.cutscene = True, True
         n = self.npc
         n.update(x=622.0, y=186.0, state="to_player", walk=True)
@@ -709,7 +726,9 @@ class Game:
         t = self.talk
         last = t["i"] >= len(t["lines"]) - 1
         if ev["tap"]:
-            if not last: t["i"] += 1
+            if not last:
+                t["i"] += 1
+                if t["tag"] == "intro" and t["i"] == SKILL_LINE: self.start_skill()
             else: self.talk_done(True)
         elif ev["back"] and t["ask"] and last:
             self.talk_done(False)
@@ -718,11 +737,11 @@ class Game:
 
     def talk_done(self, yes):
         t, self.talk = self.talk, None
-        if t["tag"] == "intro":                      # the supervisor walks to the desk and sits down
+        if t["tag"] == "intro":                      # the Boss walks to the desk and sits down
             n = self.npc
             n["state"] = "to_seat"
             n["path"] = self.find_path((n["x"], n["y"]), (NPC_OBJ.ax, NPC_OBJ.ay)) + [NPC_SEAT]
-            self.notes.append("Supervisor: bring the finished circuit to me (desk on the right).")
+            self.notes.append("Boss: bring the finished circuit to me (desk on the right).")
         elif t["tag"] == "ask" and yes:
             self.judge()
         elif t["tag"] == "verdict":
@@ -744,13 +763,13 @@ class Game:
                             "QA test %d of %d: I will check the two inputs of the work order.   Space = test it     Esc = not yet"
                             % (self.rnd + 1, ROUNDS)], "ask", ask=True)
 
-    def judge(self):                     # the supervisor tests the circuit and tells right or wrong
+    def judge(self):                     # the Boss tests the circuit and tells right or wrong
         res = [(k, set(self.on_of(k)) == set(GOLD[k])) for k in self.codes]
         good = sum(ok for _, ok in res)
         lines = ["Let me test your circuit..."]
         for k, ok in res:
             lines.append("Input %d%d%d (must show %s): %s" % (bits(k) + (CHAR_NAME[k], "correct!" if ok else "WRONG.")))
-        self.notes.append("QA test %d: supervisor says %d/2 correct" % (self.rnd + 1, good))
+        self.notes.append("QA test %d: Boss says %d/2 correct" % (self.rnd + 1, good))
         if good == 2:
             if self.rnd + 1 >= ROUNDS:
                 lines.append("All %d tests passed! The decoder is verified. You may leave through the exit door." % ROUNDS)
@@ -789,7 +808,7 @@ class Game:
             for sink, src in REF:
                 if self.w.get(sink) != src:
                     return "Try this next: wire the %s to the %s." % (sink_name(sink), src_name(src))
-        return "Every segment already matches. Show it to the supervisor."
+        return "Every segment already matches. Show it to the Boss."
 
     def smart_hint(self):
         missing = [sp for sp in ITEM_SPOTS if sp.id not in self.done_spots]
@@ -848,12 +867,21 @@ class Game:
             if time.time() > self.over_until: self.reset_stage()
             return
         self.slow_t = max(0.0, self.slow_t - dt)
+        self.skill_t = max(0.0, self.skill_t - dt)                  # the skill keeps counting, even during a dialogue
+        if self.zoom:
+            self.zoom["t"] += dt
+            if self.zoom["t"] >= ZOOM_SECS: self.zoom = None
+        press = ev["skill"] or (self.sw[13] and not self._sw13) or (ev["click"] and SKILL_BTN.collidepoint(ev["click"]) and self.mode == "map")
+        self._sw13 = self.sw[13]
         self.card_trigger()
         if self.deck["active"]: self.cards_input(ev); return
         if self.r_done[1] and not self.intro_started: self.start_intro()
         self.npc_update(dt)
         if self.talk: self.talk_input(ev); return
         if self.cutscene: return
+        self.play_t += dt                                           # play time since the Boss sat down
+        if self.zoom: return                                        # short camera zoom on the part you just found
+        if press: self.try_skill()
         if self.hint_popup:
             if ev["tap"] or ev["back"]: self.hint_popup = None
             return
@@ -862,8 +890,27 @@ class Game:
         if self.mode == "map": self.map_update(dt, ev)
         else: self.closeup_input(ev)
 
+    # ---------------- workshop-shirt skill: see the hidden parts for 10 s ----------------
+    def look(self):                      # skin drawn: the workshop shirt (form 1) from the start; gown after clearing
+        return self.form
+
+    def skill_ready(self):
+        return self.play_t >= SKILL_WAIT and not self.skill_used and self.skill_t <= 0
+
+    def start_skill(self):
+        self.skill_t = SKILL_SECS
+
+    def try_skill(self):
+        if self.skill_t > 0: return self.say("The skill is already on!")
+        if self.skill_used: return self.say("You already used the skill again.")
+        if self.play_t < SKILL_WAIT: return self.say("Skill recharging: %d s left" % math.ceil(SKILL_WAIT - self.play_t))
+        if self.mode != "map": return self.say("Use the skill while walking around the office.")
+        self.skill_used = True
+        self.start_skill()
+        self.say("WORKSHOP SHIRT: hidden parts revealed for %d s!" % SKILL_SECS)
+
     def speed(self):
-        s = BASE_SPEED * (1.2 if self.form >= 1 else 1.0)
+        s = BASE_SPEED * 1.2
         return s * 0.5 if self.slow_t > 0 else s
 
     def blocked(self, x, y):             # true if any sample point of the feet box is on a solid or off the floor
@@ -1084,15 +1131,25 @@ class Game:
                 pygame.draw.rect(ui, (90, 120, 160), o.rect, 2)
                 ui.blit(self.f_tiny.render(o.name, True, (255, 255, 255)), (o.rect.x + 2, o.rect.y + 2))
             self.txt(ui, "Background image not found. Put bg.jpg in:  " + ASSET_DIRS[0], 12, UH - 24, self.f_s, (255, 200, 120))
+        if self.skill_t > 0:                                         # skill: the hidden parts glow
+            pulse = math.sin(time.time() * 7)
+            for sp in ITEM_SPOTS:
+                if sp.id in self.done_spots: continue
+                r = int(16 + 3 * pulse)
+                glow = pygame.Surface((r * 2 + 4, r * 2 + 4), pygame.SRCALPHA)
+                pygame.draw.circle(glow, (255, 220, 60, 90), (r + 2, r + 2), r)
+                ui.blit(glow, (sp.ix - r - 2, sp.iy - r - 2))
+                pygame.draw.circle(ui, (255, 230, 90), (sp.ix, sp.iy), r, 3)
         npc_on = self.npc["state"] != "off"
         if npc_on and self.npc["y"] <= self.py: self.draw_npc(ui)
         self.draw_player(ui)
+        self.hide_legs(ui)
         if npc_on and self.npc["y"] > self.py: self.draw_npc(ui)
         f = None if (self.talk or self.cutscene) else self.find_near()
         if f:
             kind, o = f
-            label = o.name if kind in ("obj", "npc") else "Search here"
-            self.ctxt(ui, "[Space] " + label, int(self.px), int(self.py - SPR_H - 16), self.f_s, (255, 230, 120))
+            if kind in ("obj", "npc"):                       # hidden parts and hints show no prompt
+                self.ctxt(ui, "[Space] " + o.name, int(self.px), int(self.py - SPR_H - 16), self.f_s, (255, 230, 120))
         if self.debug:
             pygame.draw.rect(ui, (0, 255, 255), FLOOR, 2)
             for poly in SOLIDS: pygame.draw.polygon(ui, (255, 0, 0), poly, 2)
@@ -1111,13 +1168,23 @@ class Game:
                 pygame.draw.rect(ui, (255, 255, 0), o.rect, 1)
                 pygame.draw.circle(ui, (255, 255, 0), (o.ax, o.ay), 4)
 
+    def hide_legs(self, ui):             # behind a partition: the room picture covers the body below the partition's top edge
+        if not self.bg: return
+        for x0, x1, ye, cut in ROW_LANES:
+            if x0 - 12 <= self.px <= x1 + 12 and ye - LANE_H <= self.py <= ye + 1:
+                r = pygame.Rect(int(self.px) - 24, cut, 48, int(self.py) + 8 - cut)
+                r = r.clip(pygame.Rect(x0, 0, x1 - x0, UH))
+                if r.w > 0 and r.h > 0: ui.blit(self.bg, r.topleft, r)
+                return
+
     def draw_player(self, ui):
-        img = self.spr.image(self.form) if self.spr else None
+        form = self.look()
+        img = self.spr.image(form) if self.spr else None
         if img:
             ui.blit(img, (int(self.px - img.get_width() / 2), int(self.py - img.get_height() + 4)))
         else:
             sx, sy = int(self.px - SPR_W / 2), int(self.py - SPR_H + 4)
-            pygame.draw.rect(ui, FORM_COLORS[self.form], (sx, sy + SPR_H // 3, SPR_W, SPR_H - SPR_H // 3), border_radius=6)
+            pygame.draw.rect(ui, FORM_COLORS[form], (sx, sy + SPR_H // 3, SPR_W, SPR_H - SPR_H // 3), border_radius=6)
             pygame.draw.circle(ui, (240, 200, 160), (sx + SPR_W // 2, sy + SPR_H // 6), max(6, SPR_W // 3))
 
     def draw_npc(self, ui):              # optional images: npc_stand.png / npc_sit.png in assets
@@ -1178,7 +1245,7 @@ class Game:
         self.txt(s, "CBA = %d%d%d" % bits(k), x + 52, y + 12, self.f_s, (143, 161, 184))
         self.txt(s, "must show  %s" % CHAR_NAME[k], x + 52, y + 34, self.f_m)
         self.txt(s, "tested by", x + 178, y + 14, self.f_tiny, (143, 161, 184))
-        self.txt(s, "supervisor", x + 178, y + 28, self.f_tiny, (143, 161, 184))
+        self.txt(s, "Boss", x + 178, y + 28, self.f_tiny, (143, 161, 184))
 
     def cu_whiteboard(self, s):
         pygame.draw.rect(s, (240, 240, 235), (40, 56, 560, 376), border_radius=6)
@@ -1186,7 +1253,7 @@ class Game:
         if self.page == 0:
             lines = ["WORK ORDER #402", "Build the 7-segment decoder.",
                      "1. Hunt for all 18 lab parts in the office.", "   (notes and screens hold hints)",
-                     "2. Bring them to the decoder bench.", "3. Wire it, then show it to the supervisor.", "",
+                     "2. Bring them to the decoder bench.", "3. Wire it, then show it to the Boss.", "",
                      "input CBA -> character", "001 = C   010 = P   011 = E", "100 = -   101 = 3   110 = 9",
                      "(000 and 111 never occur)"]
             for i, l in enumerate(lines): self.txt(s, l, 62, 68 + i * 33, self.f_mono, ink)
@@ -1208,7 +1275,7 @@ class Game:
             for i, k in enumerate(self.codes):
                 self.txt(s, "input CBA = %d%d%d  ->  show %s" % (bits(k) + (CHAR_NAME[k],)), 70, 140 + i * 130, self.f_mono, ink)
                 draw_set(s, GOLD[k], 470, 126 + i * 130, 54, 92, (215, 215, 210))
-        if self.qa_pairs:                                # progress: which characters the supervisor has already checked
+        if self.qa_pairs:                                # progress: which characters the Boss has already checked
             for i, pair in enumerate(self.qa_pairs):
                 if i < self.rnd: txt, col = "Test %d: %s and %s - passed" % (i + 1, CHAR_NAME[pair[0]], CHAR_NAME[pair[1]]), (20, 120, 40)
                 else: txt, col = "Test %d: not done yet" % (i + 1), (90, 90, 100)
@@ -1395,7 +1462,7 @@ class Game:
         elif self.wcur < len(SINKS): line, lc = "%s  =  %s" % (sink_name(SINKS[self.wcur]), src_name(w.get(SINKS[self.wcur]))), muted
         else: line, lc = "Press BTNC to remove every wire", muted
         self.txt(ui, line, 14, 505, self.f_s, lc)
-        self.txt(ui, "Mouse: colored output -> white pin (click a wired pin = remove) | Keys: L/R pin, BTNC wire, hold BTNC back | SW2-0 = test | Done? Esc, then ask the supervisor",
+        self.txt(ui, "Mouse: colored output -> white pin (click a wired pin = remove) | Keys: L/R pin, BTNC wire, hold BTNC back | SW2-0 = test | Done? Esc, then ask the Boss",
                  14, 524, self.f_tiny, (140, 150, 180))
 
     # ---------------- drawing: overlays ----------------
@@ -1474,18 +1541,19 @@ class Game:
         self.ctxt(s, "STAGE 2: INTERNSHIP - HOW TO PLAY", 320, 64, self.f_l)
         rows = [("Move", "W A S D / arrows   (BTNU BTND BTNL BTNR)"),
                 ("Interact / confirm", "Space   (BTNC tap)"),
-                ("Search / read a hint", "Space when [Space] Search here shows"),
+                ("Search / read a hint", "Space next to a suspicious spot"),
                 ("Back / cancel", "hold Space 0.8 s, or Esc   (BTNC hold)"),
                 ("Test input C B A", "keys 3 2 1 = SW2 SW1 SW0, or click them below"),
                 ("Inventory / Notebook", "I (SW15)   /   N (SW14)"),
+                ("Workshop-shirt skill", "E or SW13 or the SKILL button (after 2 min)"),
                 ("This help", "H"),
-                ("Test shortcuts", "F5 next part, F7 all parts, F8 auto-wire, F6 spots")]
+                ("Test shortcuts", "F5 next part, F7 parts, F8 auto-wire, F9 skill ready")]
         for i, (a, b) in enumerate(rows):
             self.txt(s, a, 54, 114 + i * 29, self.f_s, (255, 230, 120))
             self.txt(s, b, 220, 114 + i * 29, self.f_s)
         self.blit_wrap(s, "Find all 18 lab parts hidden around the office (read the hints on notes and screens), install them on the "
-                          "decoder bench, wire the 7-segment decoder on the breadboard, show it to the supervisor for 3 QA tests, then leave by "
-                          "the exit door. A failed QA test costs 1 heart.", 54, 356, 532, self.f_s, (170, 200, 255), 22)
+                          "decoder bench, wire the 7-segment decoder on the breadboard, show it to the Boss for 3 QA tests, then leave by "
+                          "the exit door. A failed QA test costs 1 heart.", 54, 370, 532, self.f_s, (170, 200, 255), 22)
         self.ctxt(s, "Press Space to start", 320, 456, self.f_m, (150, 255, 170))
 
     def draw_hud(self, ui):
@@ -1500,6 +1568,20 @@ class Game:
         if self.mode == "map" or not (self.cur and self.cur.kind == "bench" and self.page == 1):
             self.rtxt(ui, "Parts %d/%d" % (self.parts_total(), TOTAL_PARTS), UW - 14, 10, self.f_s, (150, 255, 170))
             self.rtxt(ui, "QA %d/%d" % (self.rnd, ROUNDS), UW - 14, 28, self.f_s, (255, 230, 120))
+
+    def draw_skill_btn(self, ui):
+        if not self.intro_started or self.mode != "map": return
+        if self.skill_t > 0: bg, fg, txt = (40, 120, 60), (255, 255, 255), "SKILL ON  %ds" % math.ceil(self.skill_t)
+        elif self.skill_used: bg, fg, txt = (50, 50, 56), (130, 130, 140), "SKILL USED"
+        elif self.skill_ready():
+            lit = int(time.time() * 3) % 2
+            bg, fg, txt = ((230, 180, 40) if lit else (190, 140, 30)), (20, 20, 20), "SKILL [E] READY"
+        else:
+            left = max(0, math.ceil(SKILL_WAIT - self.play_t))
+            bg, fg, txt = (50, 50, 56), (200, 200, 210), "SKILL  %d:%02d" % (left // 60, left % 60)
+        pygame.draw.rect(ui, bg, SKILL_BTN, border_radius=8)
+        pygame.draw.rect(ui, (255, 255, 255), SKILL_BTN, 1, border_radius=8)
+        self.ctxt(ui, txt, SKILL_BTN.centerx, SKILL_BTN.y + 7, self.f_s, fg)
 
     def draw_toast(self, ui):
         if time.time() < self.toast[1]:
@@ -1538,16 +1620,32 @@ class Game:
             draw_set(scr, on, 14 + i * 40, y0 + 26, 32, 52)
         self.txt(scr, "7-SEG: H3 = hearts | at the bench: C B A + decoder output", 14, y0 + 84, self.f_tiny, (170, 170, 190))
         self.txt(scr, "LED: 0-2 hearts  3 armor  4-12 part types done  13-15 QA tests", 360, y0 + 78, self.f_tiny, (140, 140, 160))
-        self.txt(scr, "Move WASD | BTNC = Space (hold = back) | SW0-7 = keys 1-8 or click | I inventory | N notebook | H help",
+        self.txt(scr, "Move WASD | BTNC = Space (hold = back) | SW0-7 = keys 1-8 or click | I inventory | N notebook | H help | E skill",
                  360, y0 + 94, self.f_tiny, (170, 170, 190))
-        self.txt(scr, "Form: %s" % FORM_NAMES[self.form], 14, y0 + 98, self.f_tiny, (140, 140, 160))
+        self.txt(scr, "Form: %s" % FORM_NAMES[self.look()], 14, y0 + 98, self.f_tiny, (140, 140, 160))
+
+    def apply_zoom(self, ui):            # camera pushes in on the part you just found, then pulls back out
+        z = self.zoom
+        if not z: return
+        k = z["t"] / ZOOM_SECS
+        e = min(1.0, k / 0.25) if k < 0.5 else min(1.0, (1.0 - k) / 0.25)      # ease in 25%, hold, ease out 25%
+        e = e * e * (3 - 2 * e)
+        f = 1.0 + (ZOOM_MAX - 1.0) * e
+        w, h = UW / f, UH / f
+        x = min(max(z["x"] - w / 2, 0), UW - w)
+        y = min(max(z["y"] - h / 2, 0), UH - h)
+        crop = ui.subsurface(pygame.Rect(int(x), int(y), int(w), int(h))).copy()
+        ui.blit(pygame.transform.smoothscale(crop, (UW, UH)), (0, 0))
 
     def draw(self, ui, screen):
         ui.fill((18, 20, 26))
         s = ui.subsurface(pygame.Rect(CU_X, 0, CU_W, UH))
         if self.mode == "closeup" and self.cur: self.draw_closeup(ui, s)
-        else: self.draw_world(ui)
+        else:
+            self.draw_world(ui)
+            self.apply_zoom(ui)
         self.draw_hud(ui)
+        self.draw_skill_btn(ui)
         if self.sw[14]: self.draw_notebook(s)
         if self.sw[15]: self.draw_inventory(s)
         if self.hint_popup:
