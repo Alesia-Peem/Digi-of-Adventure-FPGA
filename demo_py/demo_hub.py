@@ -22,9 +22,9 @@ import pygame
 
 DEMO_MENU = True                     # False = hub works but no menu is drawn
 REGISTRY = [                         # (tab label, python module, class name) - edit to match your files
-    ("Stage 1", "stage1", "Game"),
-    ("Stage 2", "stage2", "Game"),
-    ("Stage 3", "stage3", "Game"),
+    ("Stage 1", "stage1_demo", "Game"),
+    ("Stage 2", "stage2_demo", "Game"),
+    ("Stage 3", "stage3_demo", "Game"),
 ]
 WINDOW = (1152, 760)
 UI_SIZE = (960, 540)
@@ -80,8 +80,6 @@ class Hub:
         self.switch(nxt, g.get_handoff() if hasattr(g, "get_handoff") else None)
 
     # ---------- menu ----------
-    def hamburger(self):
-        return pygame.Rect(WINDOW[0] - 52, 8, 44, 34)
 
     def menu_items(self):
         x0, w = WINDOW[0] - 372, 360
@@ -120,7 +118,7 @@ class Hub:
                   bool(getattr(g, "debug", False)), hasattr(g, "toggle_debug")),
                  ("button", "Restart stage", (lambda: (g.start(), self.close())), False, True)])
             row([("button", "Skip to next stage >>", self.next_stage, False, True)])
-        row([("sub", "F10 or the menu button: open / close. Game pauses.", None, False, True)], 20)
+        row([("sub", "F10 or the menu button", None, False, True)], 20)
         self.panel = pygame.Rect(x0, 46, w, y - 46 + 6)
         return items
 
@@ -152,9 +150,6 @@ class Hub:
                     self.open = not self.open
                     continue
                 if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
-                    if self.hamburger().collidepoint(e.pos):
-                        self.open = not self.open
-                        continue
                     if self.open:
                         self.click(e.pos)
                         continue
@@ -168,11 +163,6 @@ class Hub:
     # ---------- drawing ----------
     def draw_overlay(self, screen, fonts):
         f, fb = fonts
-        hb = self.hamburger()
-        pygame.draw.rect(screen, (30, 32, 42), hb, border_radius=6)
-        pygame.draw.rect(screen, EDGE, hb, 2, border_radius=6)
-        for k in range(3):
-            pygame.draw.rect(screen, TXT, (hb.x + 9, hb.y + 8 + k * 8, hb.w - 18, 3))
         if time.time() < self.note[1]:
             img = f.render(self.note[0], True, TXT)
             r = pygame.Rect(WINDOW[0] // 2 - img.get_width() // 2 - 10, GAME_H - 40, img.get_width() + 20, 28)
