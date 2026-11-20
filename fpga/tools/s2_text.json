@@ -1,0 +1,362 @@
+{
+ "spot_name": [
+  "Green recycling bin",
+  "Yellow recycling bin",
+  "Water bottle",
+  "Potted plant",
+  "Pen cup",
+  "Binder, bottom-left desk",
+  "Binder, top-left desk",
+  "Binder, top-right desk",
+  "Headset",
+  "Binder, middle row (left)",
+  "Binder, middle row (right)",
+  "Cardboard box",
+  "Blue box on the gray cabinet",
+  "Box on the shelf rack",
+  "Wall cabinet",
+  "Plant behind the beanbag",
+  "Bookshelf, upper shelf",
+  "Bookshelf, lower shelf"
+ ],
+ "spot_xy": [
+  [
+   48,
+   490
+  ],
+  [
+   81,
+   444
+  ],
+  [
+   75,
+   393
+  ],
+  [
+   169,
+   321
+  ],
+  [
+   301,
+   308
+  ],
+  [
+   222,
+   441
+  ],
+  [
+   344,
+   210
+  ],
+  [
+   484,
+   205
+  ],
+  [
+   514,
+   213
+  ],
+  [
+   450,
+   300
+  ],
+  [
+   499,
+   302
+  ],
+  [
+   776,
+   414
+  ],
+  [
+   226,
+   128
+  ],
+  [
+   717,
+   214
+  ],
+  [
+   343,
+   141
+  ],
+  [
+   289,
+   129
+  ],
+  [
+   863,
+   319
+  ],
+  [
+   870,
+   382
+  ]
+ ],
+ "spot_clue": [
+  "Clue: Chips get thrown away like trash. Look at the recycling bins in the bottom-left corner.",
+  "Clue: Two recycling bins stand in the bottom-left corner. The yellow one is not empty.",
+  "Clue: Big resistors hide in things you drink from, write with or listen with. Start at the coffee corner.",
+  "Clue: OR chips like plants. One plant stands next to the water cooler on the left.",
+  "Clue: Somebody keeps pens in a cup on the first desk of the middle row.",
+  "Clue: Small resistors hide inside office binders. The bottom-left desk has one.",
+  "Clue: Small resistors hide inside office binders. The top-left desk has one.",
+  "Clue: Small resistors hide inside office binders. The top-right desk has one.",
+  "Clue: Something you wear on your ears sits on a desk in the top row.",
+  "Clue: Small resistors hide inside office binders. Check the middle row, left desk.",
+  "Clue: Small resistors hide inside office binders. Check the middle row, right desk.",
+  "Clue: A display needs a safe box. Try the cardboard box on the floor beside the black desk.",
+  "Clue: Small blue box, high up: it sits on top of the low gray cabinet on the left.",
+  "Clue: Breadboards live in boxes on shelves. Check the rack under the projector.",
+  "Clue: Power supplies are heavy: open the tall two-door metal cabinet on the back wall.",
+  "Clue: Another OR chip hides in the plant behind the pink beanbag, near the cabinets.",
+  "Clue: Small resistors hide inside office binders. The bookshelf on the right has two.",
+  "Clue: Small resistors hide inside office binders. The bookshelf on the right has two."
+ ],
+ "part_label": [
+  "74HC04 hex inverter (NOT)",
+  "74HC08 quad AND",
+  "74HC32 quad OR",
+  "7-segment display",
+  "DIP switch",
+  "10k ohm resistor",
+  "220 ohm resistor",
+  "Breadboard + jumper wires",
+  "Bench DC supply"
+ ],
+ "part_short": [
+  "74HC04",
+  "74HC08",
+  "74HC32",
+  "7-seg",
+  "DIP sw",
+  "10k",
+  "220 ohm",
+  "Breadboard",
+  "DC supply"
+ ],
+ "part_qty": [
+  1,
+  1,
+  2,
+  1,
+  1,
+  3,
+  7,
+  1,
+  1
+ ],
+ "hint_title": [
+  "Sticky note",
+  "Tag on the locker",
+  "Paper on the cabinet",
+  "Wall monitor",
+  "Papers on a desk",
+  "Cork board",
+  "Boss at the black desk",
+  "Sticky note (bottom desk)",
+  "Calendar note (bottom desk)"
+ ],
+ "hint_text": [
+  "SHOPPING LIST: 1 NOT chip, 1 AND chip, 2 OR chips, 1 display, 1 DIP switch, 3 big resistors (10k), 7 small resistors (220), 1 breadboard with jumper wires, 1 power supply. That is 18 pieces.",
+  "Heavy stuff stays in the tall metal cabinet with two doors on the back wall: the bench power supply is in there.",
+  "Logic chips are like trash to this office: look in the recycling bins in the bottom-left corner (green and yellow).",
+  "Resistors with BIG values (10k) hide in things people drink from, write with or listen with: a bottle, a pen cup, a headset.",
+  "Seven small 220 ohm resistors sit in office binders: two on the top-row desks, two in the middle row, one at the bottom-left desk and two on the bookshelf on the right.",
+  "OR chips like plants: one by the water cooler on the left wall and one behind the pink beanbag. Breadboards and wires: a box on the shelf rack under the projector.",
+  "Boss: 'The display? We keep spare parts in the cardboard box on the floor next to my desk. And that little blue box on top of the gray cabinet is a DIP switch.'",
+  "Hidden things have no marker: walk close to anything suspicious and press Space to search it. Notes, screens and boards around the office hold hints. Hints you read are saved in the notebook (N).",
+  "When the Parts counter reaches 18/18, come to the bottom-right desk. The decoder bench is right here."
+ ],
+ "intro": [
+  "Welcome to the lab, intern! I am your Boss.",
+  "Today's job: build a 7-segment decoder on the bench. It must show the characters C, P, E, -, 3 and 9.",
+  "First, collect the 18 parts hidden around the office. Walk close to anything suspicious and press Space to search it. Notes, screens and boards hold hints.",
+  "You are wearing the workshop shirt you earned in the last stage. It has a skill: for 10 seconds you can SEE the hidden parts. Watch, I will show you once!",
+  "See them glowing? Work for 2 minutes and you can use the skill one more time, whenever you like. A SKILL button lights up at the top right (key E, or flip SW13).",
+  "When you have everything, go to the decoder bench at the bottom-right desk and wire the breadboard: give every chip +5V and GND, power the DIP switch, add the pull-down and display resistors. The switches SW2-SW0 let you test your circuit.",
+  "Finished? Bring it to me. I will test it and tell you if it is right or wrong. A wrong answer costs a heart!",
+  "I will be at my desk on the right. Good luck!"
+ ],
+ "sink_name": [
+  "chip U1 power pin (VCC)",
+  "chip U1 ground pin (GND)",
+  "chip U2 power pin (VCC)",
+  "chip U2 ground pin (GND)",
+  "chip U3 power pin (VCC)",
+  "chip U3 ground pin (GND)",
+  "chip U4 power pin (VCC)",
+  "chip U4 ground pin (GND)",
+  "DIP switch common pin (+5V)",
+  "10k pull-down of switch C (to GND)",
+  "10k pull-down of switch B (to GND)",
+  "10k pull-down of switch A (to GND)",
+  "display common cathode (GND)",
+  "NOT gate N1 input A",
+  "NOT gate N2 input A",
+  "NOT gate N3 input A",
+  "AND gate A1 input A",
+  "AND gate A1 input B",
+  "AND gate A2 input A",
+  "AND gate A2 input B",
+  "AND gate A3 input A",
+  "AND gate A3 input B",
+  "AND gate A4 input A",
+  "AND gate A4 input B",
+  "OR gate O1 input A",
+  "OR gate O1 input B",
+  "OR gate O2 input A",
+  "OR gate O2 input B",
+  "OR gate O3 input A",
+  "OR gate O3 input B",
+  "OR gate O4 input A",
+  "OR gate O4 input B",
+  "OR gate O5 input A",
+  "OR gate O5 input B",
+  "OR gate O6 input A",
+  "OR gate O6 input B",
+  "OR gate O7 input A",
+  "OR gate O7 input B",
+  "OR gate O8 input A",
+  "OR gate O8 input B",
+  "220 ohm resistor a (input end)",
+  "220 ohm resistor b (input end)",
+  "220 ohm resistor c (input end)",
+  "220 ohm resistor d (input end)",
+  "220 ohm resistor e (input end)",
+  "220 ohm resistor f (input end)",
+  "220 ohm resistor g (input end)",
+  "display segment a pin",
+  "display segment b pin",
+  "display segment c pin",
+  "display segment d pin",
+  "display segment e pin",
+  "display segment f pin",
+  "display segment g pin"
+ ],
+ "src_name": [
+  "(no wire)",
+  "+5V rail",
+  "GND rail",
+  "switch C",
+  "switch B",
+  "switch A",
+  "output of gate N1",
+  "output of gate N2",
+  "output of gate N3",
+  "output of gate A1",
+  "output of gate A2",
+  "output of gate A3",
+  "output of gate A4",
+  "output of gate O1",
+  "output of gate O2",
+  "output of gate O3",
+  "output of gate O4",
+  "output of gate O5",
+  "output of gate O6",
+  "output of gate O7",
+  "output of gate O8",
+  "220 ohm resistor a (output end)",
+  "220 ohm resistor b (output end)",
+  "220 ohm resistor c (output end)",
+  "220 ohm resistor d (output end)",
+  "220 ohm resistor e (output end)",
+  "220 ohm resistor f (output end)",
+  "220 ohm resistor g (output end)"
+ ],
+ "char_name": [
+  "?",
+  "C",
+  "P",
+  "E",
+  "-",
+  "3",
+  "9",
+  "?"
+ ],
+ "gold": [
+  "",
+  "adef",
+  "abefg",
+  "adefg",
+  "g",
+  "abcdg",
+  "abcdfg",
+  ""
+ ],
+ "item_text": {
+  "HINT_HARD": [
+   "Hint",
+   "Use it from the inventory (I)."
+  ],
+  "BOOST": [
+   "Speed Boost",
+   "Saved for the Obby stage. No effect here."
+  ],
+  "ARMOR": [
+   "Armor",
+   "Blocks the next failed QA penalty."
+  ],
+  "SHARD": [
+   "Armor Shard",
+   "Collect 2 shards to forge 1 Armor."
+  ],
+  "SLOW": [
+   "Slow",
+   "You walk slower for 10 seconds."
+  ],
+  "HINT_SMART": [
+   "Hint",
+   "Use it from the inventory (I)."
+  ],
+  "FREEZE": [
+   "Freeze",
+   "Stops moving obstacles for 5 s. Saved for Stage 3."
+  ],
+  "UNDO": [
+   "Undo",
+   "Reverts your latest wiring change."
+  ]
+ },
+ "note": [
+  "",
+  "Found 74HC04 (Green recycling bin)",
+  "Found 74HC08 (Yellow recycling bin)",
+  "Found 10k (Water bottle)",
+  "Found 74HC32 (Potted plant)",
+  "Found 10k (Pen cup)",
+  "Found 220 ohm (Binder, bottom-left desk)",
+  "Found 220 ohm (Binder, top-left desk)",
+  "Found 220 ohm (Binder, top-right desk)",
+  "Found 10k (Headset)",
+  "Found 220 ohm (Binder, middle row (left))",
+  "Found 220 ohm (Binder, middle row (right))",
+  "Found 7-seg (Cardboard box)",
+  "Found DIP sw (Blue box on the gray cabinet)",
+  "Found Breadboard (Box on the shelf rack)",
+  "Found DC supply (Wall cabinet)",
+  "Found 74HC32 (Plant behind the beanbag)",
+  "Found 220 ohm (Bookshelf, upper shelf)",
+  "Found 220 ohm (Bookshelf, lower shelf)",
+  "Hint: Sticky note",
+  "Hint: Tag on the locker",
+  "Hint: Paper on the cabinet",
+  "Hint: Wall monitor",
+  "Hint: Papers on a desk",
+  "Hint: Cork board",
+  "Hint: Boss at the black desk",
+  "Hint: Sticky note (bottom desk)",
+  "Hint: Calendar note (bottom desk)",
+  "All parts installed. Bench powered on.",
+  "Boss: bring the finished circuit to me (desk on the right).",
+  "QA test 1: Boss says 0/2 correct",
+  "QA test 1: Boss says 1/2 correct",
+  "QA test 1: Boss says 2/2 correct",
+  "QA test 2: Boss says 0/2 correct",
+  "QA test 2: Boss says 1/2 correct",
+  "QA test 2: Boss says 2/2 correct",
+  "QA test 3: Boss says 0/2 correct",
+  "QA test 3: Boss says 1/2 correct",
+  "QA test 3: Boss says 2/2 correct"
+ ]
+}

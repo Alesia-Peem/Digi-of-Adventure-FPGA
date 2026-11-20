@@ -74,8 +74,8 @@ HINTS = {
 HINT_ORDER = (2, 1, 0, 3)          # smart hint priority after P5: P3 -> P2 -> P1 -> P4
 
 # Round 1 is FIXED: card colour index 0 = green, 1 = yellow, 2 = red (see CAREERS)
-#   green = Hint (P3), yellow = Hint (P3), red = Armor
-CARD_ITEMS = {1: ["HINT_HARD", "HINT_HARD", "ARMOR"],
+#   green = Hint (P3), yellow = Speed Boost, red = Armor   (same as stage2_demo.py)
+CARD_ITEMS = {1: ["HINT_HARD", "BOOST", "ARMOR"],
               2: ["SHARD", "SLOW", "HINT_SMART"],
               3: ["FREEZE", "UNDO", "SHARD"]}
 # Description here is the default text. Hints, Undo and Shard get their text from grant().
@@ -923,7 +923,7 @@ class Game:
 
         clue_rows = [
             ("Facebook, Explorer, Canva", "2", "0"),
-            ("Facebook, Canva, X", "1", "1"),
+            ("Facebook, Canva, X", "1", "0"),       # fixed: with "1" the only solution was E-C-P, not C-P-E
             ("Canva, AppStore, Pinterest", "2", "1"),
             ("Pinterest, AppStore, Facebook", "1", "0"),
             ("AppStore, Explorer, Facebook", "1", "0"),
