@@ -1,0 +1,43 @@
+"""Place beside main.py and run: python owner_mode.py"""
+import sys, os
+from functools import partial
+import tkinter as tk
+
+# ดึงโฟลเดอร์หลักขึ้นมาเพื่อให้ Python มองเห็นทั้ง demo_py และ onlystage_3
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+try:
+    import onlystage_3.settings as C
+except ModuleNotFoundError:
+    import settings as C
+
+from demo_py.stage3_demo import App
+
+
+def enter_stage(app, stage, event=None):
+    app.game.stage = stage
+    app.game.restart(f"Stage {stage}  /  {' to '.join(C.ROUTES[stage])}")
+    app.flush()
+    app.canvas.focus_set()
+    return "break"
+
+
+def run():
+    root = tk.Tk()
+    app = App(root)
+    root.title("Digi of Adventure | Owner Mode")
+    bar = tk.Menu(root)
+    stages = tk.Menu(bar, tearoff=False)
+    for stage in sorted(app.game.maps):
+        shortcut = f"F{stage}"
+        select = partial(enter_stage, app, stage)
+        stages.add_command(label=f"Stage {stage}   {' to '.join(C.ROUTES[stage])}",
+                           accelerator=shortcut, command=select)
+        root.bind(f"<{shortcut}>", select)
+    bar.add_cascade(label="Select stage", menu=stages)
+    root.configure(menu=bar)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    run()

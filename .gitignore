@@ -9,3 +9,9 @@ venv/
 fpga/sim/
 fpga/vivado/cpe_escape/
 fpga/vivado/reports/
+
+# Windows/Office junk from the Drive export
+*:Zone.Identifier
+*~RF*.TMP
+* - Copy.png
+__pycache__/

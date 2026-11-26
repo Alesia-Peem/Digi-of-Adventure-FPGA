@@ -22,7 +22,7 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-sys.path.insert(0, os.path.join(ROOT, "demo_py"))
+sys.path.insert(0, os.path.join(ROOT, "demo_py_old"))  # old reference until its phase ports the NEW game
 import numpy as np  # noqa: E402
 import pygame  # noqa: E402
 from PIL import Image  # noqa: E402

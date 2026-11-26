@@ -62,7 +62,7 @@ class Solid:
 
 def load_level():
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
-    sys.path.insert(0, os.path.join(ROOT, "demo_py"))
+    sys.path.insert(0, os.path.join(ROOT, "demo_py_old"))  # old reference until its phase ports the NEW game
     import stage3_demo as s3
     return s3, [Solid(s) for s in s3.solids], s3.DEF
 
