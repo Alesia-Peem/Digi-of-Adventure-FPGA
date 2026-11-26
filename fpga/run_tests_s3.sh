@@ -18,4 +18,21 @@ grep -E "^CR_TEST|random|stage [123]," sim/cr_test_model.log
 echo "== 3. scenario files for the RTL (game and model must agree while writing them)"
 (cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py gen 2>&1) > sim/cr_gen.log || { quiet < sim/cr_gen.log; exit 1; }
 grep "^cr " sim/cr_gen.log
+IV="iverilog -g2005 -I rtl/stage3"
+
+echo "== 4. RTL arithmetic unit cr_math.v (multiply, divide, square root) vs Python"
+(cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py genmath)
+$IV -o sim/build/cr_tb_math.vvp rtl/stage3/cr_math.v tb/cr_tb_math.v
+vvp -n sim/build/cr_tb_math.vvp | tee sim/cr_tb_math.log | grep -E "CR_TB_MATH|FAIL"
+grep -q "CR_TB_MATH: PASS" sim/cr_tb_math.log
+
+echo "== 5. RTL player + collision (cr_core.v) vs the model, bit exact, every step"
+(cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py genphys)
+for steps in 1 2; do
+  name=phys; [ $steps = 2 ] && name=phys2
+  $IV -Pcr_tb_cosim.PHYS=1 -Pcr_tb_cosim.STEPS=$steps -o sim/build/cr_tb_cosim_p$steps.vvp \
+    rtl/stage3/cr_math.v rtl/stage3/cr_core.v tb/cr_tb_cosim.v
+  vvp -n sim/build/cr_tb_cosim_p$steps.vvp +STIM=sim/cr_${name}_stim.mem +OUT=sim/cr_${name}_rtl.txt | grep CR_TB
+  (cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py cmp $name phys)
+done
 echo "CR TESTS: PASS"

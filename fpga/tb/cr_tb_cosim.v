@@ -2,15 +2,17 @@
 // the columns of cr_model.Model.HEADER (cr_cosim.py cmp compares them with the model).
 //   word: [0] left [1] right [2] jump [3] skill [4] menu      or  [8] command, [15:12] op, [31:16] argument
 //   +STIM=sim/cr_x_stim.mem +OUT=sim/cr_x_rtl.txt      parameter PHYS=1: no animals, no lifts (Task 7 stimulus)
+//   parameter STEPS: steps per tick (1 = one step per stimulus word; 2 = the board)
 `timescale 1ns/1ps
 module cr_tb_cosim;
     parameter PHYS = 0;
+    parameter STEPS = 1;
     reg clk = 0, rst = 1;
     always #5 clk = ~clk;
     reg gtick = 0, bl = 0, br = 0, ej = 0, es = 0, em = 0, enter = 0, dcmd = 0;
     reg [3:0] dop = 0; reg [15:0] darg = 0;
     wire busy, step_done, exit_req; wire [2:0] mode; wire [1:0] level; wire [12:0] cam_px; wire [31:0] q_data;
-    cr_core #(.MEM_DIR("mem/"), .STEPS_PER_TICK(1), .PHYS_ONLY(PHYS)) dut (
+    cr_core #(.MEM_DIR("mem/"), .STEPS_PER_TICK(STEPS), .PHYS_ONLY(PHYS)) dut (
         .clk(clk), .rst(rst), .gtick(gtick), .btn_left(bl), .btn_right(br), .ev_jump(ej), .ev_skill(es),
         .ev_menu(em), .enter(enter), .demo_cmd(dcmd), .demo_op(dop), .demo_arg(darg), .exit_req(exit_req),
         .step_done(step_done), .busy(busy), .mode(mode), .level(level), .cam_px(cam_px), .q_idx(6'd0),

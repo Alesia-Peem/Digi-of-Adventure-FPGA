@@ -554,11 +554,11 @@ def _phys():
             press(300, axis=0)
     at(1, 0, 3)                                        # level edges, a position outside the level
     press(80, axis=-1)
-    at(1, 255.5, 6, False)
+    at(2, 255.5, 6, False)                             # stage 2: the door stays shut without the tea
     press(200)
     at(2, 239.5, 2)                                    # stage 2: the "?" box is a solid box
     press(300, 5, 30, axis=1)
-    for stage in (1, 2, 3):                            # random play
+    for stage in (1, 2, 3):                            # random play (doors are Task 9: stop before them)
         for seed in range(2):
             rng = random.Random(77 + seed * 10 + stage)
             r.command(OP_STAGE, stage)
@@ -566,7 +566,10 @@ def _phys():
             for _ in range(6000):
                 if rng.random() < .02:
                     axis = rng.choice((1, 1, 1, 0, -1))
+                if r.m.px > 225 * M.Q:
+                    axis = -1
                 r.step(axis, rng.random() < .025)
+    assert all(row[0] == M.PLAY for row in r.trace), "the player stimulus reached a door"
     return r
 
 
@@ -585,6 +588,23 @@ def gen_phys():
     r = _phys()
     _write("phys", r.words, r.trace)
     print("cr phys      %6d steps, %d words" % (len(r.trace), len(r.words)))
+    # the same words with 2 steps per tick (the board): jump counts for the first step of the tick only
+    m, trace = model(1, physics_only=True), []
+    for w in r.words[:40000]:
+        if w & CMD:
+            op, arg = w >> 12 & 15, w >> 16
+            if op == OP_STAGE:
+                m.stage = arg
+                m.restart()
+            else:
+                m.teleport((arg & 511) * M.Q // 2, (arg >> 9 & 31) * M.Q // 2, bool(arg >> 14 & 1))
+            continue
+        axis = (w >> 1 & 1) - (w & 1)
+        for k in range(2):
+            m.step(axis, bool(w >> 2 & 1) and k == 0)
+            trace.append(m.snapshot())
+    _write("phys2", r.words[:40000], trace)
+    print("cr phys2     %6d steps (2 per tick)" % len(trace))
 
 
 def gen_math():
