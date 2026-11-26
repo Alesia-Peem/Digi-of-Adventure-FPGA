@@ -17,7 +17,9 @@ module tb_stage_mgr;
 `include "pic_map.vh"
     localparam [2:0] OPEN = 3'd0, S1 = 3'd1, C12 = 3'd2, S2 = 3'd3, C23 = 3'd4, S3 = 3'd5, ENDS = 3'd6,
                      BOOT = 3'd7;
-    localparam integer VB_PER = 400, GT_PER = 37;       // vblank / game-tick periods (clk)
+    // realistic ratio: on the board the game tick (60.000 Hz) and vblank (59.5 Hz) periods are almost equal, so a
+    // tap released just before a vblank reaches the manager only with the NEXT tick, on the new screen
+    localparam integer VB_PER = 400, GT_PER = 389;      // vblank / game-tick periods (clk)
 
     reg clk = 1'b0, rst = 1'b1;
     always #5 clk = ~clk;
@@ -104,6 +106,17 @@ module tb_stage_mgr;
         if (which == 1) s1_exit = 1'b1; else if (which == 2) s2_exit = 1'b1; else s3_exit = 1'b1;
         @(negedge clk); s1_exit = 1'b0; s2_exit = 1'b0; s3_exit = 1'b0;
     end endtask
+    // exit request (which = 1..3) or, which = 0, a tap on a picture screen, then a second short press released
+    // ~30..60 clk before the vblank that applies the change, with no game tick between the release and the vblank
+    task late_tap(input integer which); begin
+        // a game tick 3 clk from now and the vblank 60..90 clk after it
+        while (!((cyc % GT_PER) == GT_PER - 3 && (cyc % VB_PER) >= VB_PER - 93 && (cyc % VB_PER) <= VB_PER - 63))
+            @(negedge clk);
+        if (which == 0) begin tap_req = 1'b1; while (tap_req) @(negedge clk); @(negedge clk); end
+        else begin repeat (3) @(negedge clk); pulse_exit(which); end
+        btnc = 1'b1; repeat (20) @(negedge clk);
+        btnc = 1'b0; tap_req = 1'b1;            // released 30..60 clk before the vblank; tap pending until next tick
+    end endtask
     task demo(input [3:0] op, input [15:0] arg); begin
         while (!gtick) @(negedge clk);
         demo_cmd = 1'b1; demo_op = op; demo_arg = arg;
@@ -142,7 +155,14 @@ module tb_stage_mgr;
             tap; stay(S1, "a tap in S1 moved the manager");
             // ---- S1 -> C12 (exit_req), handoff latched at the exit
             s1_armor = 2'd2; s1_shard = 1'b1; s1_boost = loop[0]; s1_form = (loop == 0) ? 2'd0 : 2'd1;
-            pulse_exit(1);
+            if (loop == 0) pulse_exit(1);
+            else begin
+                // DOUBLE TAP on S1's clear screen: the exit, then a second short press released between the
+                // requesting tick and the vblank; input_hub hands its tap out with the next tick (on C12)
+                late_tap(1);
+                wait_screen(C12, "C12 not reached by s1_exit (double tap)");
+                stay(C12, "double tap: the late tap skipped C12");
+            end
             s1_armor = 2'd0; s1_shard = 1'b0; s1_boost = 1'b0;           // the stage may change them afterwards
             wait_screen(C12, "C12 not reached by s1_exit");
             check_pic(PIC_CUT12, "C12 picture");
@@ -178,6 +198,16 @@ module tb_stage_mgr;
             check_pic(PIC_END1, "END picture");
             // ---- END -> OPEN; loop 1: BTNC pressed again before the transition and held across it
             if (loop == 1) begin
+                // double tap on END: the second tap is released just before the vblank -> must not skip OPEN
+                late_tap(0);
+                wait_screen(OPEN, "OPEN not reached from END (double tap)");
+                stay(OPEN, "double tap: the late tap skipped OPEN");
+            end
+            if (loop == 1) begin
+                tap; wait_screen(S1, "S1 after the double-tap check");
+                pulse_exit(1); wait_screen(C12, "C12 (held check)"); tap; wait_screen(S2, "S2 (held check)");
+                pulse_exit(2); wait_screen(C23, "C23 (held check)"); tap; wait_screen(S3, "S3 (held check)");
+                pulse_exit(3); wait_screen(ENDS, "END (held check)");
                 tap;
                 btnc = 1'b1;
                 wait_screen(OPEN, "OPEN not reached from END");
