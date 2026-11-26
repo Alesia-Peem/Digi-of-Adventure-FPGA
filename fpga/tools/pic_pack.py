@@ -81,7 +81,10 @@ def quantize_picture(img):
                                                      dither=Image.Dither.NONE)
     flat = q.getpalette()[:256 * 3]
     flat += [0] * (256 * 3 - len(flat))
-    pal = [((flat[i * 3] // 17) << 8) | ((flat[i * 3 + 1] // 17) << 4) | (flat[i * 3 + 2] // 17)
+    # Pillow's median-cut palette entries are box averages (not multiples of 17): round, never floor.
+    def lvl(v):
+        return min(15, (v + 8) // 17)
+    pal = [(lvl(flat[i * 3]) << 8) | (lvl(flat[i * 3 + 1]) << 4) | lvl(flat[i * 3 + 2])
            for i in range(256)]
     return np.asarray(q).astype(np.uint8), pal
 
