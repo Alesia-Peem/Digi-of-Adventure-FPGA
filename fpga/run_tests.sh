@@ -6,7 +6,10 @@ set -e
 cd "$(dirname "$0")"
 ROOT=$(cd .. && pwd)
 mkdir -p sim/build sim/frames
-INC="-I rtl/common -I rtl/ui -I rtl/stage2 -I rtl/stage3"
+INC="-I rtl/common -I rtl/ui -I rtl/stage2 -I rtl/stage3 -I rtl/video"
+# -DSIMULATION: rtl/video/qspi_io.v is behavioural (no STARTUPE2 / IOBUF) - needed by every compile of the
+# top or of rtl/video/*.v. Vivado (create_project.tcl) never defines it.
+IVS="$IV -DSIMULATION"
 IV="iverilog -g2005 $INC"
 
 echo "== 1. assets + UI program"
@@ -80,7 +83,7 @@ done
 (cd "$ROOT" && python3 -I fpga/tools/cosim_s3.py cmp $S3 2>/dev/null)
 
 echo "== 7. full design elaborates (top level)"
-$IV -o sim/build/top.vvp rtl/common/*.v rtl/video/*.v rtl/ui/*.v rtl/stage1/*.v rtl/stage2/*.v rtl/stage3/*.v \
+$IVS -o sim/build/top.vvp rtl/common/*.v rtl/video/*.v rtl/ui/*.v rtl/stage1/*.v rtl/stage2/*.v rtl/stage3/*.v \
   rtl/top/*.v && echo "top: elaborated"
 
 echo "== 8. QSPI picture streamer: pic_stream + qspi_reader vs the S25FL128S model (pixel exact vs previews)"
@@ -108,17 +111,40 @@ $IV -I rtl/video -o sim/build/tb_stage_mgr.vvp rtl/top/stage_mgr.v tb/tb_stage_m
 vvp -n sim/build/tb_stage_mgr.vvp | grep -E "TB_STAGE_MGR|FAIL"
 vvp -n sim/build/tb_stage_mgr.vvp | grep -q "TB_STAGE_MGR: PASS"
 
+echo "== 11. top level: flash model on the QSPI pins -> OPEN shows the title (pixel exact), BTNC -> Stage 1"
+$IVS -o sim/build/tb_top_pic.vvp rtl/common/*.v rtl/video/*.v rtl/ui/*.v rtl/stage1/*.v rtl/stage2/*.v \
+  rtl/stage3/*.v rtl/top/*.v tb/flash_model.v tb/tb_top_pic.v
+vvp -n sim/build/tb_top_pic.vvp | tee sim/build/tb_top_pic.log | grep -E "TB_TOP_PIC|FAIL|captured|WARNING"
+grep -q "TB_TOP_PIC: PASS" sim/build/tb_top_pic.log
+python3 -I - <<'PY'
+# game area (VGA lines 60..419) = mem/preview/pic_TITLE.png exactly (bg_mode 5, fade 16, empty display list);
+# lines outside the game area black
+import sys
+import numpy as np
+from PIL import Image
+tok = open("sim/frames/top_title.ppm").read().split()
+assert tok[:4] == ["P3", "640", "480", "15"]
+rtl = np.array(tok[4:], dtype=np.int32).reshape(480, 640, 3)
+ref = np.asarray(Image.open("mem/preview/pic_TITLE.png").convert("RGB"), dtype=np.int32)
+assert ref.shape == (360, 640, 3) and not np.any(ref % 17)
+exp = np.zeros((480, 640, 3), dtype=np.int32)
+exp[60:420] = ref // 17
+n = int(np.any(rtl != exp, axis=2).sum())
+print("top_title   : %6d differing pixels %s" % (n, "OK" if n == 0 else "DIFF"))
+sys.exit(0 if n == 0 else 1)
+PY
+
 if [ "$1" != "quick" ]; then
   echo "== 12. VGA frames: RTL video pipeline vs Python model (pixel exact) - takes a long time"
   python3 -I tools/frame_check.py pick full
-  $IV -o sim/build/tb_frame.vvp rtl/common/*.v rtl/stage1/*.v rtl/video/*.v rtl/ui/ui_composer.v tb/tb_frame.v
+  $IVS -o sim/build/tb_frame.vvp rtl/common/*.v rtl/stage1/*.v rtl/video/*.v rtl/ui/ui_composer.v tb/tb_frame.v
   vvp -n sim/build/tb_frame.vvp +STIM=sim/s1_full_stim.mem +SNAP=sim/frame_ticks.txt +OUTDIR=sim/frames | grep captured
   python3 -I tools/frame_check.py cmp
   python3 -I tools/frame_check.py pick2
-  $IV -o sim/build/tb_frame2.vvp rtl/common/*.v rtl/stage2/*.v rtl/video/*.v rtl/ui/ui_composer.v tb/tb_frame2.v
+  $IVS -o sim/build/tb_frame2.vvp rtl/common/*.v rtl/stage2/*.v rtl/video/*.v rtl/ui/ui_composer.v tb/tb_frame2.v
   vvp -n sim/build/tb_frame2.vvp +STIM=sim/s2_full_stim.mem +SNAP=sim/frame_ticks2.txt +OUTDIR=sim/frames | grep captured
   python3 -I tools/frame_check.py cmp frame_ticks2.txt
-  $IV -o sim/build/tb_frame3.vvp rtl/common/*.v rtl/stage3/*.v rtl/video/*.v rtl/ui/ui_composer.v tb/tb_frame3.v
+  $IVS -o sim/build/tb_frame3.vvp rtl/common/*.v rtl/stage3/*.v rtl/video/*.v rtl/ui/ui_composer.v tb/tb_frame3.v
   printf "0\n2\n5A\nDD\n209\n375\n" > sim/frame_ticks3_careless.txt
   vvp -n sim/build/tb_frame3.vvp +STIM=sim/s3_careless_stim.mem +SNAP=sim/frame_ticks3_careless.txt \
     +OUTDIR=sim/frames +PRE=hcareless_ | grep captured
