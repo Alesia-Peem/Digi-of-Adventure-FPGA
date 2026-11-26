@@ -79,3 +79,7 @@ Task 6: fix round 1/5 re-review: 2 addressed, 0 open (17861c1..54b526a)
 Task 6: complete (commits 0798845..54b526a, review clean after 1 fix round)
 Task 7: dispatched (BASE 54b526a, opus)
 Snapshot pushed on user request; Task 7 commits (4773d6d, 028f543) pushed UNREVIEWED.
+Task 7: implemented (54b526a..028f543) DONE; BRAM est ~49/135 (unverified); concerns: cam/zoom/bg_mode latched per frame; S1/S2 frame stimulus regenerated from demo_py_old; stale ui_*.png previews; check cx_m/rq_m multiplier timing in Vivado. Review dispatched.
+Task 7: complete (commits 54b526a..028f543, review clean)
+Task 7: minor (deferred): line_renderer.v:707 comment on rd_x sampling wrong; tb_frame/tb_frame2 FLASH_BYTES hard-coded + stale pictures.hex possible; frames12 pipeline hides generator failure; ui_*.png previews stale (old 64-colour rooms); no top-level room frame through real wiring
+Task 8: dispatched (sonnet, raised one tier from R16 'easy': flash config errors only show on the board). Plus R17 STATUS section and T2 README minors.
