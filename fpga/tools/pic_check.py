@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """pic_check.py - exact pixel check of the pic_stream testbench output against the packer previews.
 
-    python3 -I fpga/tools/pic_check.py TITLE S2_ROOM
+    python3 -I fpga/tools/pic_check.py TITLE S2_ROOM TITLE_RELOAD=TITLE
+
+NAME or PPMNAME=PREVIEWNAME (compare sim/frames/pic_PPMNAME.ppm with mem/preview/pic_PREVIEWNAME.png).
 
 For every NAME: reads fpga/sim/frames/pic_<NAME>.ppm (written by tb_pic_stream: P3, maxval 15,
 "# rows r0 r1 ..." comment = which picture rows were streamed, in file order) and compares each row
@@ -36,9 +38,10 @@ def read_ppm(path):
     return rows, vals.reshape(h, w, 3) * 17
 
 
-def check(name):
+def check(arg):
+    name, _, prev = arg.partition("=")
     ppm = os.path.join(FPGA, "sim", "frames", "pic_%s.ppm" % name)
-    png = os.path.join(FPGA, "mem", "preview", "pic_%s.png" % name)
+    png = os.path.join(FPGA, "mem", "preview", "pic_%s.png" % (prev or name))
     if not os.path.isfile(ppm):
         print("PIC_CHECK: FAIL %s (no %s)" % (name, ppm))
         return False
@@ -66,4 +69,4 @@ def main(names):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:] or ["TITLE", "S2_ROOM"])
+    main(sys.argv[1:] or ["TITLE", "S2_ROOM", "TITLE_RELOAD=TITLE"])

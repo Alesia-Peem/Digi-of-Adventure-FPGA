@@ -54,8 +54,8 @@ echo "== 8. QSPI picture streamer: pic_stream + qspi_reader vs the S25FL128S mod
 for late in 1 0; do
   $IV -I rtl/video -Ptb_pic_stream.LATE=$late -o sim/build/tb_pic_stream.vvp \
     rtl/video/qspi_reader.v rtl/video/pic_stream.v tb/flash_model.v tb/tb_pic_stream.v
-  vvp -n sim/build/tb_pic_stream.vvp | grep -E "TB_PIC_STREAM|FAIL|margin"
-  python3 -I tools/pic_check.py TITLE S2_ROOM
+  vvp -n sim/build/tb_pic_stream.vvp | grep -E "TB_PIC_STREAM|FAIL|margin|queued"
+  python3 -I tools/pic_check.py TITLE S2_ROOM TITLE_RELOAD=TITLE
   vvp -n sim/build/tb_pic_stream.vvp +ZERO | grep -E "TB_PIC_STREAM|FAIL|missing"
 done
 

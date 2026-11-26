@@ -34,6 +34,7 @@ PIC_BASE = 0x400000          # flash byte address; the xc7a100t bitstream (~3.8 
 FLASH_SIZE = 16 * 1024 * 1024
 MAGIC = b"CPEP"
 VERSION = 1
+MAX_W = 768                  # pic_stream line budget: a row of w bytes takes ~4w + 90 clk < 3200 clk
 
 
 def find_asset(stem):
@@ -101,6 +102,8 @@ def build():
     entries = []
     data_start = (8 + 8 * n + 255) & ~255
     for (name, stem, kind, smooth, w, h) in pic_list.PICS:
+        # pic_stream.v fetches one row per VGA line: 4 clk/byte + ~90 clk overhead must fit in 3200 clk
+        assert w <= MAX_W, "%s: width %d > %d bytes = one row fetch per VGA line (3200 clk)" % (name, w, MAX_W)
         idx, pal = quantize_picture(source_image(name, stem, kind, smooth, w, h))
         assert idx.shape == (h, w) and idx.dtype == np.uint8, name
         assert len(pal) == 256 and all(0 <= c <= 0xFFF for c in pal), name

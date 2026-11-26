@@ -17,7 +17,9 @@
 //     Implementation: ping-pong 2 x 1024 x 8 row buffer with a row tag per half. On a row_req the front
 //     (displayed) half becomes the half holding the previous request's row; the new row is fetched into
 //     the other half, unless it is already resident in either half (Stage 1 asks for every source row
-//     twice in a row -> one fetch per source row). Row length = picture width w (<= 1024).
+//     twice in a row -> one fetch per source row). Row length = picture width w <= 768: the line budget
+//     (4 clk / byte + ~90 clk overhead < 3200 clk) allows ~777 B; pic_pack.py asserts it. The 1024-byte
+//     halves are just the BRAM shape (w is clamped to 1024 so a bad header cannot overrun them).
 //     Fetch = one 0x6B burst of w bytes: 640 B ~ 2.65k clk < 3200 clk (one VGA line).
 //   * rd_x -> rd_rgb = palette[front_row[rd_x]], 2 clk latency (row RAM, then palette RAM), same as
 //     rom_sync + palette in line_renderer.
@@ -93,7 +95,7 @@ module pic_stream #(
     reg [10:0] bcnt;
     reg [7:0]  pal_lo;
     reg [23:0] img_base;          // flash address of row 0
-    reg [10:0] wlen;              // row length (bytes) = w, at most 1024
+    reg [10:0] wlen;              // row length (bytes) = w (<= 768 by pic_pack; clamped to 1024)
     reg        loaded;
     reg        pend_load, pend_row;
     reg [4:0]  pend_id;

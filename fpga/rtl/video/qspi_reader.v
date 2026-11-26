@@ -57,15 +57,6 @@ module qspi_reader #(
     assign busy      = (st != S_IDLE);
     assign qspi_dq_o = {2'b11, 1'b0, sr[31]};
 
-    // capture one nibble (called once per SCK cycle of the data phase)
-    task take(input [3:0] n);
-        begin
-            if (!nph) nib_hi <= n;
-            else begin data <= {nib_hi, n}; data_valid <= 1'b1; end
-            nph <= ~nph;
-        end
-    endtask
-
     always @(posedge clk) begin
         if (rst) begin
             st <= S_INIT; hi <= 1'b0; bcnt <= 6'd0; ncnt <= 17'd0; nph <= 1'b0; nib_hi <= 4'd0;
@@ -101,10 +92,13 @@ module qspi_reader #(
             end
             S_DATA: begin
                 qspi_sck <= ~hi; hi <= ~hi;
-                if (!hi) begin
-                    if (LATE_SAMPLE == 0) take(qspi_dq_i);
-                end else begin
-                    if (LATE_SAMPLE != 0) take(qspi_dq_i);
+                // capture one nibble per SCK cycle: high nibble first, data_valid with the low one
+                if (hi == (LATE_SAMPLE != 0)) begin
+                    if (!nph) nib_hi <= qspi_dq_i;
+                    else begin data <= {nib_hi, qspi_dq_i}; data_valid <= 1'b1; end
+                    nph <= ~nph;
+                end
+                if (hi) begin
                     ncnt <= ncnt - 17'd1;
                     if (ncnt == 17'd1) begin qspi_csn <= 1'b1; bcnt <= 6'd0; st <= S_GAP; end
                 end

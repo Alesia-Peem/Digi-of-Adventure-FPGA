@@ -87,7 +87,7 @@ breadboard tile map, Stage-3 sky (8-bit vertical gradient, 2×2 ordered dither t
 Big pictures (rooms, cutscenes, endings) live in the QSPI flash at `PIC_BASE` = 0x400000 (`tools/pic_pack.py`:
 "CPEP" header, per picture a 256 × 12-bit palette + w × h index bytes). `pic_stream.v` loads the palette on
 `pic_load` (vblank) and fetches one whole row per `row_req` with a single `0x6B` quad read (`qspi_reader.v`,
-SCK 50 MHz, 640 B ≈ 2 650 clk < 3 200 clk per line) into a ping-pong 2 × 1024-byte row buffer: one line of
+SCK 50 MHz, 640 B ≈ 2 650 clk < 3 200 clk per line) into a ping-pong 2 × 1024-byte row buffer (w ≤ 768 B = line budget): one line of
 latency (row of request k−1 readable via `rd_x` → `rd_rgb`, 2 clk, during line k); repeated rows are not re-fetched.
 
 ## 5. Stage 1 game logic (`s1_core.v`)

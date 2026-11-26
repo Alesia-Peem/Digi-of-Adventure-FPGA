@@ -109,13 +109,17 @@ module tb_pic_stream #(parameter integer LATE = 1);   // qspi_reader LATE_SAMPLE
     integer w, h, i, k, rep, ncmd0, line_i, n_req;
     reg [11:0] first [0:1023];
     reg [8*64-1:0] fname;
+    // subset: 0 all rows, 1 rows 0..31 + 300..h-1, 2 rows 356, 357, 300 (tag reset after a picture change)
     task stream(input [4:0] id, input [8*16-1:0] name, input integer repeated, input integer subset);
         begin
             w = {fbyte(8 + 8 * id + 5), fbyte(8 + 8 * id + 4)};
             h = {fbyte(8 + 8 * id + 7), fbyte(8 + 8 * id + 6)};
             nrows = 0;
-            for (i = 0; i < h; i = i + 1)
-                if (!subset || i < 32 || i >= 300) begin rows[nrows] = i; nrows = nrows + 1; end
+            if (subset == 2) begin          // rows S2_ROOM leaves resident in both halves, then another one
+                rows[0] = 356; rows[1] = 357; rows[2] = 300; nrows = 3;
+            end else
+                for (i = 0; i < h; i = i + 1)
+                    if (!subset || i < 32 || i >= 300) begin rows[nrows] = i; nrows = nrows + 1; end
             // pic_load in "vblank", wait for busy low (ruling R-d)
             @(posedge clk); pic_id <= id; pic_load <= 1'b1;
             @(posedge clk); pic_load <= 1'b0;
@@ -159,6 +163,59 @@ module tb_pic_stream #(parameter integer LATE = 1);   // qspi_reader LATE_SAMPLE
         end
     endtask
 
+    // expected pixel straight from the flash model (header -> palette -> index)
+    function [11:0] exp_rgb(input [4:0] id, input integer row, input integer x);
+        integer off, pw, a;
+        begin
+            off = {fbyte(8 + 8 * id + 3), fbyte(8 + 8 * id + 2), fbyte(8 + 8 * id + 1), fbyte(8 + 8 * id)};
+            pw  = {fbyte(8 + 8 * id + 5), fbyte(8 + 8 * id + 4)};
+            a   = fbyte(off + 512 + row * pw + x);
+            exp_rgb = {fbyte(off + 2 * a + 1), fbyte(off + 2 * a)};
+        end
+    endfunction
+    task pulse_row(input [9:0] r);
+        begin @(posedge clk); src_row <= r; row_req <= 1'b1; @(posedge clk); row_req <= 1'b0; end
+    endtask
+    task pulse_load(input [4:0] id);
+        begin @(posedge clk); pic_id <= id; pic_load <= 1'b1; @(posedge clk); pic_load <= 1'b0; end
+    endtask
+    task expect_row(input [4:0] id, input integer row, input [8*48-1:0] what);
+        begin
+            for (i = 0; i < 640; i = i + 1)
+                if (pix[i] !== exp_rgb(id, row, i)) begin fail(what); i = 640; end
+        end
+    endtask
+    // directed: requests that arrive while a fetch is running are queued, the latest one wins
+    task queued_requests;
+        begin
+            ncmd0 = fm.ncmd;
+            pulse_row(10'd10);                      // fetch of 10 starts
+            repeat (100) @(posedge clk);
+            if (!busy) fail("no fetch running for the queued-request test");
+            pulse_row(10'd20);                      // queued ...
+            repeat (100) @(posedge clk);
+            pulse_row(10'd30);                      // ... and replaced by 30 (latest wins)
+            while (busy) @(posedge clk);
+            if (fm.ncmd - ncmd0 != 2) fail("queued row_req: expected fetches of rows 10 and 30 only");
+            line(10'd30, 640);                      // 30 resident -> no fetch, shown now
+            if (fm.ncmd - ncmd0 != 2) fail("queued row_req: row 30 fetched twice");
+            expect_row(PIC_TITLE, 30, "queued row_req: row 30 wrong");
+            // pic_load during a fetch: queued, runs after it, invalidates the TITLE rows
+            ncmd0 = fm.ncmd;
+            pulse_row(10'd40);
+            repeat (100) @(posedge clk);
+            if (!busy) fail("no fetch running for the queued-load test");
+            pulse_load(PIC_S2_ROOM);
+            while (busy) @(posedge clk);
+            if (fm.ncmd - ncmd0 != 3) fail("queued pic_load: expected row 40 + header + palette");
+            line(10'd30, 0);                        // 30 was TITLE's: must be fetched again
+            line(10'd30, 640);
+            if (fm.ncmd - ncmd0 != 4) fail("queued pic_load: row 30 not re-fetched after the load");
+            expect_row(PIC_S2_ROOM, 30, "queued pic_load: S2_ROOM row 30 wrong");
+            $display("queued requests: row_req during a fetch (latest wins) and pic_load during a fetch checked");
+        end
+    endtask
+
     integer t_miss, r_shown;
     initial begin
         repeat (5) @(posedge clk);
@@ -193,6 +250,8 @@ module tb_pic_stream #(parameter integer LATE = 1);   // qspi_reader LATE_SAMPLE
             if (missing) fail("missing with a programmed flash");
             stream(PIC_TITLE, "TITLE", 0, 0);
             stream(PIC_S2_ROOM, "S2_ROOM", 1, 1);
+            stream(PIC_TITLE, "TITLE_RELOAD", 0, 2);  // rows 356/357 still hold S2_ROOM data -> must refetch
+            queued_requests;
         end
         if (fm.errors != 0) begin errors = errors + 1; $display("FAIL: %0d flash protocol errors", fm.errors); end
         if (n_cont != 0) begin errors = errors + 1; $display("FAIL: DQ bus contention on %0d cycles", n_cont); end
