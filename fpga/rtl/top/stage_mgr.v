@@ -10,6 +10,8 @@
 //     In that same cycle: the new screen (-> bg_mode in the top), the stage enter pulse and, for a picture
 //     screen, pic_load + pic_id -> entering / leaving bg_mode 5 and loading the picture happen together in
 //     vblank (ruling R13); pic_stream loads header + palette (~2.3k clk) long before the first row request.
+//     Entering Stage 1 / Stage 2 also loads its room (PIC_S1_ROOM / PIC_S2_ROOM, bg_mode 1 / 2 read it from
+//     pic_stream) in that vblank - once per entry, never per frame. Stage 3 loads nothing.
 //   * One request at a time: while a change is pending, further requests are ignored (no skipped screens).
 //   * BTNC on a picture screen: the input_hub tap (= release of a short press) acts once. A tap can still be
 //     on its way when a screen is entered: input_hub keeps it pending until the NEXT game tick (up to
@@ -145,6 +147,10 @@ module stage_mgr (
                     default: ;
                 endcase
                 if (is_pic(nxt)) begin pic_load <= 1'b1; pic_id <= first_pic(nxt); end
+                // Stage 1 / Stage 2 rooms are streamed from the flash too (bg_mode 1 / 2): load the room on
+                // every entry (normal sequence, demo jump, demo restart); Stage 3 has no picture
+                if (nxt == SC_S1) begin pic_load <= 1'b1; pic_id <= PIC_S1_ROOM; end
+                if (nxt == SC_S2) begin pic_load <= 1'b1; pic_id <= PIC_S2_ROOM; end
                 if (nxt == SC_C12) form <= max2(form, 2'd1);
                 if (nxt == SC_C23) form <= max2(form, 2'd2);
             end

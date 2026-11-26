@@ -7,11 +7,8 @@ Outputs: fpga/mem/*.mem   (one hex value per line, read with $readmemh)
          fpga/mem/preview/*.png  (what the FPGA will show, for a visual check)
 
 Memory map (all images are palette-indexed; index 0 of the sprite palette = transparent)
-  bg_s1.mem      640 x 358, 6-bit index  : Stage 1 room (finalexam.jpg). 1 stored px = 2x2 screen px,
-                 i.e. 1 stored px = 3.125 world px of stage1_demo.py (IMG_W=2000 -> 640).
-  bg_s1_pal.mem  64 x 12-bit RGB (4:4:4, what the Nexys A7 VGA DAC can show)
-  bg_s2.mem      640 x 358, 6-bit index  : Stage 2 office (bg.jpg), shown 1:1 in the 640x360 game area
-  bg_s2_pal.mem  64 x 12-bit
+  (The Stage 1 / Stage 2 rooms are no longer ROMs: they are the 640 x 358 pictures PIC_S1_ROOM / PIC_S2_ROOM of
+   the QSPI flash image, made by pic_list.py / pic_pack.py and streamed by rtl/video/pic_stream.v.)
   spr.mem        64 images x 32 x 32, 7-bit index, address = img*1024 + y*32 + x
                    img  0..47 : player, img = form*12 + dir*3 + pose
                                 dir  0 front 1 back 2 left 3 right   pose 0 stand 1 stepl 2 stepr
@@ -41,7 +38,6 @@ ASSETS = os.path.join(ROOT, "assets")
 OUT = os.path.join(ROOT, "fpga", "mem")
 PREV = os.path.join(OUT, "preview")
 
-BG_W, BG_H = 640, 358
 DIRS = ["front", "back", "left", "right"]
 POSES = ["stand", "stepl", "stepr"]
 CAREERS = ["air", "earth", "water"]
@@ -66,23 +62,6 @@ def write_mem(name, values, digits):
         for v in values:
             f.write("%0*X\n" % (digits, v))
     print("  %-16s %7d words" % (name, len(values)))
-
-
-# ---------------------------------------------------------------- backgrounds
-def convert_bg(src, tag):
-    img = Image.open(os.path.join(ASSETS, src)).convert("RGB").resize((BG_W, BG_H), Image.LANCZOS)
-    # quantise in 12-bit space so the palette is exactly what the DAC shows
-    a = (np.asarray(img) >> 4) * 17
-    q = Image.fromarray(a.astype("uint8")).quantize(colors=64, method=Image.Quantize.MEDIANCUT,
-                                                     dither=Image.Dither.NONE)
-    pal = q.getpalette()[:64 * 3]
-    pal += [0] * (64 * 3 - len(pal))
-    idx = np.asarray(q).astype(int).flatten()
-    pal12 = [rgb12(pal[i * 3:i * 3 + 3]) for i in range(64)]
-    write_mem("bg_%s.mem" % tag, idx.tolist(), 2)
-    write_mem("bg_%s_pal.mem" % tag, pal12, 3)
-    prev = np.array([expand12(pal12[i]) for i in idx], dtype="uint8").reshape(BG_H, BG_W, 3)
-    Image.fromarray(prev).save(os.path.join(PREV, "bg_%s.png" % tag))
 
 
 # ---------------------------------------------------------------- sprites + cards
@@ -222,8 +201,6 @@ def convert_circle():
 if __name__ == "__main__":
     os.makedirs(PREV, exist_ok=True)
     print("assets:", ASSETS)
-    convert_bg("finalexam.jpg", "s1")
-    convert_bg("bg.jpg", "s2")
     convert_sprites()
     convert_font()
     convert_circle()

@@ -22,7 +22,7 @@ Reference: the Pygame demos in `demo_py/` (Stage 1 = `stage1_demo.py` + `player_
                       program ROM ui_prog.mem = every Pygame draw_* function, compiled
                                         │  display list (≤256 primitives) + text RAM
                                         ▼
- vga_timing ─────►  line_renderer  ── background ROM (room picture) + display list ─► VGA pins
+ vga_timing ─────►  line_renderer  ── background (rooms / pictures from the QSPI flash) + display list ─► VGA pins
  seven_seg / LEDs ◄─ s1_core (H3 + live values, LED0..11 like draw_panel())
 ```
 
@@ -53,8 +53,9 @@ Why it is split like this:
 
 | ROM / RAM | size | why this format | ≈ BRAM36 |
 |---|---|---|---|
-| Stage 1 room `bg_s1.mem` | 640×358 × 6 bit | finalexam.jpg is pixel art (~688 px native); 64-colour palette per room is visually identical to 256 colours (`mem/preview/`) | 42 |
-| Stage 2 room `bg_s2.mem` | 640×358 × 6 bit | bg.jpg, same treatment, ready for the Stage 2 port | 42 |
+| ~~Stage 1 room `bg_s1.mem` + 64-colour palette~~ | ~~640×358 × 6 bit~~ | **removed (Task 7)**: now `PIC_S1_ROOM` in the QSPI flash, 256 colours, streamed by `pic_stream` | ~~42~~ → 0 |
+| ~~Stage 2 room `bg_s2.mem` + 64-colour palette~~ | ~~640×358 × 6 bit~~ | **removed (Task 7)**: now `PIC_S2_ROOM` in the QSPI flash | ~~42~~ → 0 |
+| `pic_stream` row buffer + palette | 2×1024×8 + 256×12 | one streamed row per line, ping-pong (shared by rooms and picture screens) | ~1 |
 | sprites + cards `spr.mem` | 64 × 32×32 × 7 bit | the PNGs are exactly 32×32 pixel art scaled to 640×640 → stored losslessly | 14 |
 | fonts `font8x16.mem` | 2 fonts × 128 × 16 rows | 8×16 (f_m/f_l) and 6×12 (f_s/f_tiny) | 1 |
 | UI program / strings / pointers | 2048×96 b, 32 K×8 b, 512×15 b | compiled screens of both stages | ~11 |
@@ -64,10 +65,11 @@ Why it is split like this:
 | Stage 2 wire table `s2_wire.mem` | 54×28 × 47 bit | end points of every possible wire | 2 |
 | Stage 3 Thai text `s3_txt.mem` | 12 K × 8 bit (10 226 bytes used) | 49 strings / digits as 1-bit bitmaps of the demo's font | 3 |
 | Stage 3 solids, text index, sine | 64×49, 64×32, 256×8 | small (may become LUT ROM) | ≤ 1 |
-| **total (estimate, not yet confirmed by Vivado)** | | | **≈ 132 of 135** |
+| **total (estimate, not yet confirmed by Vivado)** | | | **≈ 49 of 135** (was ≈ 132 before Task 7: −84 for the two rooms, +~1 pic_stream) |
 
-The XC7A50T (Nexys A7-50T) has only 75 BRAM36: it cannot hold both rooms. `create_project.tcl 50t`
-warns about this. (Option for a 50T: store Stage 2's room at 320×179 and upscale ×2.)
+All BRAM figures are estimates (depth × width rounded to RAMB36 shapes) until the first Vivado run reports the
+real RAMB36/RAMB18 per instance. With the rooms in the flash the estimate fits the XC7A50T (75 BRAM36) as well;
+`create_project.tcl 50t` prints the estimate.
 
 ## 4. The display engine
 
@@ -80,9 +82,17 @@ Primitives: `RECT`, `CLRBG`, `CIRCLE` (filled or ring, half-widths from `circ.me
 (8×16, 16×32 or 6×12 font), `SPRITE` (32×32 image, scale 1..4, optional mirror), `WIRES` (Stage 2) and
 the Stage 3 group: `WATER`, `TERRAIN`, `TEXTIMG`, `HILLS` (section 8).
 
-Background per pixel (`bg_mode`): solid colour (close-ups), Stage-1 room with camera (stored pixel =
-2×2 screen pixels, `addr = ((cam_y+y)/2)*640 + (cam_x+x)/2`), Stage-2 room 1:1 or zoomed, Stage-2
+Background per pixel (`bg_mode`): solid colour (close-ups), Stage-1 room with camera (source pixel =
+2×2 screen pixels: row `(cam_y+y)/2`, column `(cam_x+x)/2`), Stage-2 room 1:1 or zoomed (row
+`min(zoom_oy + y·zoom_inv/65536, 357)`, column `min(zoom_ox + x·zoom_inv/65536, 639)`), Stage-2
 breadboard tile map, Stage-3 sky (8-bit vertical gradient, 2×2 ordered dither to the 4-bit DAC).
+Both rooms are 640×358 pictures in the QSPI flash (`PIC_S1_ROOM`, `PIC_S2_ROOM`), read through `pic_stream`
+exactly like `bg_mode 5`: the source row of game line L is requested one request ahead (hcount 640 of VGA line
+L+58, from registered `L·zoom_inv` / `cam_y+L`), the source column goes to `rd_x` from a 2-stage register
+pipeline on hcount (hcount holds 4 clk per pixel). `bg_mode`, camera and zoom are latched once per frame, one
+pixel after `frame_end`, so a game tick in the middle of a frame cannot tear the background or desynchronise
+the row requests. `stage_mgr` loads the room (`pic_load`, vblank) on every Stage 1 / Stage 2 entry.
+Flash missing: the `pic_stream` stripes show through and the game keeps running.
 
 Big pictures (rooms, cutscenes, endings) live in the QSPI flash at `PIC_BASE` = 0x400000 (`tools/pic_pack.py`:
 "CPEP" header, per picture a 256 × 12-bit palette + w × h index bytes). `pic_stream.v` loads the palette on
@@ -103,7 +113,8 @@ defines it) the module is behavioural and exposes the flash clock on `sim_sck`, 
 leave with their `exit_req` (Stage 3: BTNC on the WIN screen, taken by the top from `C3_WIN`); the picture
 screens (placeholders until Phase 5: title, cutscene 1-2, cutscene 2-3, ending 1) leave on a BTNC tap. A change
 is requested, then applied in the next vblank: in that cycle the stage `*_enter` pulse fires, or, for a
-picture screen, `pic_load` + `pic_id` fire together with the switch to `bg_mode 5`. On a picture screen the
+picture screen, `pic_load` + `pic_id` fire together with the switch to `bg_mode 5` (entering Stage 1 / 2:
+`pic_load` of its room; Stage 3: no load). On a picture screen the
 top feeds the composer only condition 0 (no `IS_S1/2/3`), so the UI program draws nothing and the picture is
 shown alone. A BTNC press held across a transition does not act on the new screen. Demo menu 13/14 jump
 straight to a stage (no cutscene). The handoff (armor, shard, boost) is latched at the stage exit; `form`
@@ -148,7 +159,7 @@ Same sequencer idea as Stage 1, following `Game._update()` of `stage2_demo.py`. 
 | Boss: BFS path + `npc_update()` | the trajectory is deterministic (the intro always starts at SPAWN), so `stage2_assets.py` records it from `npc_update()` itself → `s2_npc.mem`, played back one entry per tick |
 | `val()` recursion over the breadboard | `s2_circuit.v`: explicit stack, same `seen` rule for wiring loops; run for the 7 segments + 27 sources every tick (wire colours, live display) and for the two QA inputs (judge, hints) |
 | 54 bezier wires | `WIRES` primitive in the renderer: Manhattan route (up/down to the curve's middle height, across, into the pin), drawn straight from the wiring register |
-| camera push-in on a found part (`apply_zoom`) | room ROM sampled through `zoom_o + screen × 65536/f`, the same transform applied by the composer to the world primitives (player, Boss, glow) |
+| camera push-in on a found part (`apply_zoom`) | room picture (flash) sampled through `zoom_o + screen × 65536/f`, the same transform applied by the composer to the world primitives (player, Boss, glow) |
 | 41 px player (`SPR_H = 62`) | fractional sprite scaling (step = 32/41 × 256) |
 | inventory overlay, Stage-2 item rules | `inventory.v` with `store_mode = 1` |
 

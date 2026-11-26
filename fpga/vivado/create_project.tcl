@@ -11,8 +11,8 @@ set board  [expr {[llength $argv] > 0 ? [lindex $argv 0] : "100t"}]
 set build  [expr {[lsearch $argv build] >= 0}]
 set part   [expr {$board eq "50t" ? "xc7a50tcsg324-1" : "xc7a100tcsg324-1"}]
 if {$board eq "50t"} {
-    puts "WARNING: the design needs ~132 BRAM36 (two room pictures alone ~84); the XC7A50T has 75."
-    puts "         Use the Nexys A7-100T (XC7A100T, 135 BRAM36) - see docs/ARCHITECTURE.md (memory budget)."
+    puts "NOTE: BRAM estimate ~49 BRAM36 (rooms streamed from the QSPI flash, not yet confirmed by Vivado);"
+    puts "      the XC7A50T has 75. The tested target is the Nexys A7-100T - see docs/ARCHITECTURE.md (memory budget)."
 }
 
 create_project cpe_escape "$here/cpe_escape" -part $part -force

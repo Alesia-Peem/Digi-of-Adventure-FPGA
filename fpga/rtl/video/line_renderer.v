@@ -4,11 +4,15 @@
 //  * The visible game area is 640 x 360 (the Pygame 960x540 UI scaled by 2/3), letter-boxed in
 //    the 640 x 480 VGA frame at rows 60..419. Rows 0..59 and 420..479 are black.
 //  * Layer 0 = BACKGROUND, read per pixel at scan-out time:
-//      bg_mode 0 solid colour | 1 Stage-1 room ROM with camera (2x upscale)
-//              2 Stage-2 room ROM, 1:1 or zoomed (src = zoom_o + screen * zoom_inv / 65536)
+//      bg_mode 0 solid colour | 1 Stage-1 room with camera (2x upscale)
+//              2 Stage-2 room, 1:1 or zoomed (src = zoom_o + screen * zoom_inv / 65536)
+//                (both rooms = 640 x 358 pictures streamed from the QSPI flash by pic_stream.v, like mode 5)
 //              3 Stage-3 sky: vertical gradient SKY0 -> SKY1 kept at 8 bit per channel, 2x2 ordered dither
 //                to the 4-bit DAC (the demo's gradient would otherwise show 4-bit bands) | 4 Stage-2 board
 //              5 full-screen picture streamed from the QSPI flash (pic_stream.v), 1:1; bg_color outside w x h
+//    bg_mode, the camera and the zoom are latched once per frame (1 pixel after the start of vblank, i.e.
+//    when ui_composer starts the display list and after stage_mgr applied a screen change) so the whole frame,
+//    including the row requests made one line ahead, uses one consistent set of values.
 //    The background colour (every mode) is then multiplied by fade/16 (floor per 4-bit channel, fade 0..16)
 //    for fade-from-black; the display list is composed on top unfaded (Pygame: faded picture, then UI).
 //  * Everything else (UI rectangles, circles, text, player sprite, cards, overlays) is a DISPLAY LIST
@@ -38,10 +42,6 @@
 //   CLRBG resets pixels to "show background" (used to put scenery back in front of the player).
 `timescale 1ns/1ps
 module line_renderer #(
-    parameter BG1_FILE  = "mem/bg_s1.mem",
-    parameter PAL1_FILE = "mem/bg_s1_pal.mem",
-    parameter BG2_FILE  = "mem/bg_s2.mem",
-    parameter PAL2_FILE = "mem/bg_s2_pal.mem",
     parameter SPR_FILE  = "mem/spr.mem",
     parameter SPAL_FILE = "mem/spr_pal.mem",
     parameter FONT_FILE = "mem/font8x16.mem",
@@ -83,14 +83,14 @@ module line_renderer #(
     input  wire [15:0] hill_ph,     // hills phase (sine-table units x 256)
     input  wire [7:0]  wave_ph,     // water surface phase
     input  wire [12:0] s3_cam,      // camera, world px (32 px per metre)
-    // bg_mode 5: full-screen picture streamed from the QSPI flash (pic_stream.v)
+    // bg_mode 1 / 2 / 5: picture streamed from the QSPI flash (pic_stream.v)
     input  wire [11:0] pic_rgb,     // pic_stream rd_rgb (2 clk after pic_rd_x)
     input  wire [9:0]  pic_w,       // picture size; outside w x h the background is bg_color
     input  wire [9:0]  pic_h,
     input  wire [4:0]  fade,        // 0..16: background colour * fade / 16 (16 = full brightness)
-    output reg         pic_row_req, // -> pic_stream row_req (one per game line)
+    output reg         pic_row_req, // -> pic_stream row_req (one per game line, bg_mode 1 / 2 / 5)
     output reg  [9:0]  pic_src_row, // -> pic_stream src_row
-    output wire [9:0]  pic_rd_x,    // -> pic_stream rd_x
+    output wire [9:0]  pic_rd_x,    // -> pic_stream rd_x (registered source column)
     // display list + text RAM write ports (from ui_composer)
     input  wire        dl_we,
     input  wire [7:0]  dl_waddr,
@@ -596,22 +596,23 @@ module line_renderer #(
 
     // ------------------------------------------------------------------ background + scan-out
     wire [9:0]  gx  = hcount;
-    wire [10:0] ax1 = cam_x + {1'b0, gx};
-    wire [9:0]  ay1 = cam_y + sgy;
-    // Stage-2 zoom: src = zoom_o + (screen * zoom_inv) >> 16   (zoom_inv = 65536 -> 1:1)
-    wire [26:0] zxm = gx * zoom_inv;
-    wire [26:0] zym = sgy * zoom_inv;
-    wire [11:0] zx  = zoom_ox + zxm[26:16];
-    wire [11:0] zy  = zoom_oy + zym[26:16];
-    wire [9:0]  sx  = (bg_mode == 3'd1) ? ax1[10:1] : (zx > 12'd639) ? 10'd639 : zx[9:0];
-    wire [8:0]  sy  = (bg_mode == 3'd1) ? ay1[9:1] : ((zy > 12'd357) ? 9'd357 : zy[8:0]);
-    wire [17:0] bg_addr = {sy, 9'd0} + {2'd0, sy, 7'd0} + {8'd0, sx};   // sy*640 + sx
-    wire [5:0]  bq1, bq2;
-    wire [11:0] pc1, pc2;
-    rom_sync #(.WIDTH(6), .DEPTH(229120), .AW(18), .MEM_FILE(BG1_FILE))  u_bg1 (.clk(clk), .addr(bg_addr), .q(bq1));
-    rom_sync #(.WIDTH(6), .DEPTH(229120), .AW(18), .MEM_FILE(BG2_FILE))  u_bg2 (.clk(clk), .addr(bg_addr), .q(bq2));
-    rom_sync #(.WIDTH(12), .DEPTH(64), .AW(6), .MEM_FILE(PAL1_FILE)) u_p1 (.clk(clk), .addr(bq1[5:0]), .q(pc1));
-    rom_sync #(.WIDTH(12), .DEPTH(64), .AW(6), .MEM_FILE(PAL2_FILE)) u_p2 (.clk(clk), .addr(bq2[5:0]), .q(pc2));
+    // per-frame latch of the background controls (pix_ce at hcount 1 of VGA line 480 = 1 pixel after
+    // vga_timing frame_end: the composer starts with the same frame_end, stage_mgr applies a screen change in
+    // the cycle after it). Nothing is displayed or requested in vblank, so every line of a frame (and every
+    // row request, made one line ahead) uses the same bg_mode / camera / zoom.
+    wire        bg_latch = pix_ce && (hcount == 10'd1) && (vcount == 10'd480);
+    reg  [2:0]  bgm;
+    reg  [10:0] cam_xl;  reg [9:0]  cam_yl;
+    reg  [11:0] zoom_oxl, zoom_oyl; reg [16:0] zoom_invl;
+    always @(posedge clk) begin
+        if (rst) begin
+            bgm <= 3'd0; cam_xl <= 11'd0; cam_yl <= 10'd0; zoom_oxl <= 12'd0; zoom_oyl <= 12'd0;
+            zoom_invl <= 17'd65536;
+        end else if (bg_latch) begin
+            bgm <= bg_mode; cam_xl <= cam_x; cam_yl <= cam_y;
+            zoom_oxl <= zoom_ox; zoom_oyl <= zoom_oy; zoom_invl <= zoom_inv;
+        end
+    end
 
     // gradient colour for this line (Stage 3 sky): t = gy * 45/16 ~ gy/360 * 1024
     wire [15:0] gtw = sgy * 16'd45;
@@ -665,24 +666,61 @@ module line_renderer #(
     always @(posedge clk) if (pix_ce) bidx_r <= bidx;
     rom_sync #(.WIDTH(12), .DEPTH(64), .AW(6), .MEM_FILE(BP_FILE)) u_bpal (.clk(clk), .addr(bidx_r), .q(pc4));
 
-    // ---- bg_mode 5: full-screen picture from pic_stream, 1:1 (src_row = game row, rd_x = game x).
+    // ---- bg_mode 1 / 2 / 5: picture from pic_stream (the Stage 1 / Stage 2 rooms, or a full-screen picture).
     //      pic_stream has ONE LINE of latency: after its k-th row_req the row of request k-1 is shown.
     //      So the request for game row L is made in the hblank of VGA line L+58 and becomes readable at
     //      the request of line L+59, i.e. for the whole of line L+60 = where game row L is scanned out.
-    //      Requests: hcount 640 (first blank pixel) of VGA lines 58..418, src_row = vcount - 58 clamped
-    //      to h-1 (the last request only makes row 359 resident). The fetch of a row has a full line.
-    //      rd_x -> rd_rgb is 2 clk, like rom_sync + palette above, so pic_rgb is sampled at ph == 1.
-    assign pic_rd_x = gx;
-    wire [9:0] preq_r = vcount - (GY0 - 10'd2);
-    wire       preq_v = (vcount >= GY0 - 10'd2) && (vcount <= GY0 + GH - 10'd2);
+    //      Requests: hcount 640 (first blank pixel) of VGA lines 58..418 (L = 0..360; the last request only
+    //      makes row 359 resident). Source row of game line L (same formulas as the former room ROMs):
+    //        bg_mode 1: (cam_y + L) >> 1          (2x upscale: every source row is asked twice in a row,
+    //                                              pic_stream fetches it once)
+    //        bg_mode 2: min(zoom_oy + (L * zoom_inv) >> 16, 357)
+    //        bg_mode 5: L
+    //      and then clamped to h-1 (pic_stream needs src_row < h). The fetch of a row has a full line.
+    //      Pipeline: vcount is stable for a whole line, so L * zoom_inv and the source row are registered
+    //      (rq_m, rq_s) long before pic_src_row samples them at hcount 640.
+    //      Column: rd_x = source column of the pixel, registered (sx_r) from hcount; rd_x -> rd_rgb is 2 clk,
+    //      like rom_sync + palette, so pic_rgb is sampled at ph == 1 (see the pipeline below).
+    wire [9:0]  rq_l   = vcount - (GY0 - 10'd2);                    // game line whose row is requested
+    wire        preq_v = (vcount >= GY0 - 10'd2) && (vcount <= GY0 + GH - 10'd2);
+    reg  [26:0] rq_m;                                               // L * zoom_inv
+    reg  [11:0] rq_s;                                               // source row before the h-1 clamp
+    wire [10:0] rq_c   = {1'b0, cam_yl} + {1'b0, rq_l};
+    wire [11:0] rq_z   = zoom_oyl + rq_m[26:16];
+    wire        pic_bg = (bgm == 3'd1) || (bgm == 3'd2) || (bgm == 3'd5);
+    always @(posedge clk) begin
+        rq_m <= rq_l * zoom_invl;
+        case (bgm)
+            3'd1:    rq_s <= {2'd0, rq_c[10:1]};
+            3'd2:    rq_s <= (rq_z > 12'd357) ? 12'd357 : rq_z;
+            default: rq_s <= {2'd0, rq_l};
+        endcase
+    end
     always @(posedge clk) begin
         if (rst) begin pic_row_req <= 1'b0; pic_src_row <= 10'd0; end
         else begin
-            pic_row_req <= pix_ce && (hcount == 10'd640) && preq_v && (bg_mode == 3'd5);
+            pic_row_req <= pix_ce && (hcount == 10'd640) && preq_v && pic_bg;
             if (pix_ce && hcount == 10'd640)
-                pic_src_row <= (pic_h == 10'd0) ? 10'd0 : (preq_r >= pic_h) ? pic_h - 10'd1 : preq_r;
+                pic_src_row <= (pic_h == 10'd0) ? 10'd0 : (rq_s >= {2'd0, pic_h}) ? pic_h - 10'd1 : rq_s[9:0];
         end
     end
+    // source column, registered. hcount changes on a pix_ce edge and then holds for 4 clk (pix_ce = 1 clk in
+    // 4); pic_stream samples rd_x at the next pix_ce edge, 4 clk later. The 2-stage path (hcount * zoom_inv
+    // -> cx_m, then offset + clamp -> sx_r) is therefore valid 2 clk before that edge.
+    //   bg_mode 1: (cam_x + x) >> 1    bg_mode 2: min(zoom_ox + (x * zoom_inv) >> 16, 639)    else: x
+    reg  [26:0] cx_m;
+    reg  [9:0]  sx_r;
+    wire [11:0] cx_c = {1'b0, cam_xl} + {2'd0, gx};
+    wire [11:0] cx_z = zoom_oxl + cx_m[26:16];
+    always @(posedge clk) begin
+        cx_m <= gx * zoom_invl;
+        case (bgm)
+            3'd1:    sx_r <= cx_c[10:1];
+            3'd2:    sx_r <= (cx_z > 12'd639) ? 10'd639 : cx_z[9:0];
+            default: sx_r <= gx;
+        endcase
+    end
+    assign pic_rd_x = sx_r;
     reg        pin_d;            // this pixel is inside the picture (w x h), registered with pix_ce
     always @(posedge clk) if (pix_ce) pin_d <= (gx < pic_w) && (sgy < pic_h);
     // fade (ruling R8): every background channel c -> floor(c * fade / 16), fade >= 16 = unchanged.
@@ -698,10 +736,10 @@ module line_renderer #(
     reg [11:0] gcol_d;
     reg [11:0] bsel;             // background colour of this pixel before the fade (valid at ph == 1)
     always @* begin
-        case (bg_mode)
+        case (bgm)
             3'd0: bsel = bg_color;
-            3'd1: bsel = pc1;
-            3'd2: bsel = pc2;
+            3'd1: bsel = pic_rgb;                            // Stage 1 room (flash), always inside
+            3'd2: bsel = pic_rgb;                            // Stage 2 room (flash), source clamped
             3'd4: bsel = pc4;
             3'd5: bsel = pin_d ? pic_rgb : bg_color;        // R9: outside the picture -> bg_color
             default: bsel = gcol_d;
@@ -715,7 +753,7 @@ module line_renderer #(
     wire [8:0] mg = bgc[7:4]  * ent[16:12];
     wire [8:0] mb = bgc[3:0]  * ent[16:12];
     always @(posedge clk) if (pix_ce) begin sbank_d <= sbank; gcol_d <= gcol; end
-    // pipeline: c0 = pix_ce cycle (addresses), c1 = ROM/LB data, c2 = palette data, compose
+    // pipeline: c0 = pix_ce cycle (addresses), c1 = ROM/LB/row data, c2 = palette data, compose
     reg [2:0]  ph;           // cycles since pix_ce
     reg        p_game, p_act, hs_d, vs_d;
     reg [3:0]  cr_o, cg_o, cb_o;

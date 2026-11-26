@@ -61,7 +61,7 @@ Pygame-side findings (not fixed - outside this phase, please confirm):
 | Fonts are 8×16 / 6×12 / 16×32 bitmaps (Menlo) instead of the Pygame default font | hardware text; sizes chosen to match f_m / f_s / f_l at 2/3 scale |
 | Cards drawn 3× = 96 px (Pygame smooth-scales to 113 px); cursor frame / name strip follow the art | crisp integer scaling of 32×32 pixel art |
 | Player drawn 2× = 64 px (Pygame 61 px) | same reason |
-| Room pictures use a 64-colour palette, 4 bits per colour channel | BRAM budget; the Nexys A7 VGA DAC is 4:4:4 anyway |
+| Room pictures use a 256-colour palette, 4 bits per colour channel (streamed from the QSPI flash) | the Nexys A7 VGA DAC is 4:4:4 |
 | Coffee stain is a circle (Pygame: ellipse) | circle primitive; it still hides the answer |
 | Toast box fixed width | box sized for the longest message |
 | Texts that named keyboard keys now name the board controls ("hold BTNC 0.8 s") | the board has no keyboard |
@@ -82,7 +82,8 @@ Pygame-side findings (not fixed - outside this phase, please confirm):
 ## 5. Next phases
 
 1. **Vivado run** (synthesis, implementation, timing, bitstream) and the first test on the board.
-   Expected first issues: BRAM is close to full (≈ 132 of 135, estimate) and the Stage 3 publish /
+   Expected first issues: BRAM ≈ 49 of 135 (estimate since the rooms moved to the flash, was ≈ 132; see
+   ARCHITECTURE.md §3 memory budget) and the Stage 3 publish /
    physics states contain wide constant multiplies that may need a pipeline register for 100 MHz.
 2. If wanted: give `stage3_demo.py` the shared features (hearts, Speed Boost / Freeze, forms, sprite art)
    in Pygame first, then port the change.
