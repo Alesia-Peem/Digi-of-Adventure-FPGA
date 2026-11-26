@@ -9,8 +9,8 @@ mkdir -p sim/build sim/frames
 INC="-I rtl/common -I rtl/ui -I rtl/stage2 -I rtl/stage3 -I rtl/video"
 # -DSIMULATION: rtl/video/qspi_io.v is behavioural (no STARTUPE2 / IOBUF) - needed by every compile of the
 # top or of rtl/video/*.v. Vivado (create_project.tcl) never defines it.
-IVS="$IV -DSIMULATION"
 IV="iverilog -g2005 $INC"
+IVS="$IV -DSIMULATION"
 
 echo "== 1. assets + UI program"
 python3 -I tools/asset_convert.py > /dev/null
