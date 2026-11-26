@@ -49,13 +49,14 @@ def pygame_canvas(stem, smooth, fill):
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
     import pygame
-    raw = pygame.image.load(find_asset(stem))
+    if not pygame.display.get_init():            # .convert() needs a display, as in the game
+        pygame.display.init()
+        pygame.display.set_mode((1, 1))
+    raw = pygame.image.load(find_asset(stem)).convert()      # the loaders all call .convert()
     iw, ih = raw.get_size()
     k = min(pic_list.PY_W / iw, pic_list.PY_H / ih)
     size = (max(1, round(iw * k)), max(1, round(ih * k)))
-    raw = raw.convert_alpha() if raw.get_bitsize() == 32 else raw
-    out = (pygame.transform.smoothscale if smooth else pygame.transform.scale)(
-        raw if raw.get_bitsize() in (24, 32) else raw.convert(24, 0), size)
+    out = (pygame.transform.smoothscale if smooth else pygame.transform.scale)(raw, size)
     s = pygame.Surface((pic_list.PY_W, pic_list.PY_H))
     s.fill(fill)
     s.blit(out, ((pic_list.PY_W - size[0]) // 2, (pic_list.PY_H - size[1]) // 2))
@@ -74,8 +75,15 @@ def quantize_picture(img):
 
     Colours must be chosen in 12-bit space (r,g,b >> 4) because that is all the DAC can show.
     """
-    # TODO(human): choose the 256-colour quantisation (see the Learn-by-Doing note in the chat)
-    raise NotImplementedError
+    # No dither: matches asset_convert.convert_bg and keeps pixel-art pictures (title) crisp.
+    a = (np.asarray(img.convert("RGB")) >> 4) * 17
+    q = Image.fromarray(a.astype("uint8")).quantize(colors=256, method=Image.Quantize.MEDIANCUT,
+                                                     dither=Image.Dither.NONE)
+    flat = q.getpalette()[:256 * 3]
+    flat += [0] * (256 * 3 - len(flat))
+    pal = [((flat[i * 3] // 17) << 8) | ((flat[i * 3 + 1] // 17) << 4) | (flat[i * 3 + 2] // 17)
+           for i in range(256)]
+    return np.asarray(q).astype(np.uint8), pal
 
 
 def rgb12_to_888(c):

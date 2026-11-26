@@ -15,3 +15,5 @@ fpga/vivado/reports/
 *~RF*.TMP
 * - Copy.png
 __pycache__/
+fpga/mem/pictures.hex
+.superpowers/
