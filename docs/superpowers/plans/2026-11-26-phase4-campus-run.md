@@ -42,7 +42,8 @@ Execution: native (this session), one fresh review of the whole branch at the en
 | Quantity | Rule |
 |---|---|
 | Length | 1 m = `Q = 600*4096 = 2457600` units, signed 32 bit |
-| Vertical state (`y`, `vy`, gravity) | extra `VF = 8` fraction bits (signed 40 bit). Whole-unit gravity can drift 2.1 mm over one 1.2 s double jump; 8 bits bounds it at 0.01 mm |
+| Player state (`x`, `vx`, `y`, `vy`, gravity) | extra `VF = 8` fraction bits (signed 40 bit). Without them: 2.1 mm gravity drift, and a wall reached one step late after a double jump |
+| Tie tolerance | vertical 128 units (52 um), horizontal 1 unit, instead of the game's EPS: exact landings are designed ties |
 | Per-step speeds (units) | run 102400, enemy 40960, tea 53248, retreat 61440, lift 16384, sink 12288, water sink 57344 (all exact) |
 | Normal gravity | `G*Q/14400 = 6965.986` units/step², stored with VF bits |
 | Player jump integration | `y += v - g/2; v -= g` (`game.py:312-314`) |
