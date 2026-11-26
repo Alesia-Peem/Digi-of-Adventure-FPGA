@@ -146,6 +146,16 @@ def main():
          "localparam integer PIC_COUNT = %d;" % len(entries)]
     for i, (name, off, w, h, *_ ) in enumerate(entries):
         L.append("localparam [4:0] PIC_%-8s = 5'd%-2d;   // %dx%d at +0x%06X" % (name, i, w, h, off))
+    for name, off, w, h, *_ in entries:
+        L.append("localparam [9:0] PIC_W_%-8s = 10'd%d, PIC_H_%-8s = 10'd%d;" % (name, w, name, h))
+    # size of picture `id` = {w, h} (line_renderer pic_w / pic_h); unknown id -> 0 x 0 (bg_color only)
+    L.append("function [19:0] pic_wh(input [4:0] id);")
+    L.append("    case (id)")
+    for i, (name, off, w, h, *_ ) in enumerate(entries):
+        L.append("        5'd%-2d: pic_wh = {PIC_W_%s, PIC_H_%s};" % (i, name, name))
+    L.append("        default: pic_wh = 20'd0;")
+    L.append("    endcase")
+    L.append("endfunction")
     with open(os.path.join(FPGA, "rtl", "video", "pic_map.vh"), "w") as f:
         f.write("\n".join(L) + "\n")
     print("pictures: %d, %.2f MB at flash 0x%06X..0x%06X" % (

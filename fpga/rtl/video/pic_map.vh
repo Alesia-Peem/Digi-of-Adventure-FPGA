@@ -23,3 +23,52 @@ localparam [4:0] PIC_END6     = 5'd18;   // 640x360 at +0x3F6300
 localparam [4:0] PIC_END7     = 5'd19;   // 640x360 at +0x42E900
 localparam [4:0] PIC_END8     = 5'd20;   // 640x360 at +0x466F00
 localparam [4:0] PIC_END9     = 5'd21;   // 640x360 at +0x49F500
+localparam [9:0] PIC_W_S1_ROOM  = 10'd640, PIC_H_S1_ROOM  = 10'd358;
+localparam [9:0] PIC_W_S2_ROOM  = 10'd640, PIC_H_S2_ROOM  = 10'd358;
+localparam [9:0] PIC_W_TITLE    = 10'd640, PIC_H_TITLE    = 10'd360;
+localparam [9:0] PIC_W_OPEN1    = 10'd640, PIC_H_OPEN1    = 10'd360;
+localparam [9:0] PIC_W_OPEN2    = 10'd640, PIC_H_OPEN2    = 10'd360;
+localparam [9:0] PIC_W_OPEN3    = 10'd640, PIC_H_OPEN3    = 10'd360;
+localparam [9:0] PIC_W_OPEN4    = 10'd640, PIC_H_OPEN4    = 10'd360;
+localparam [9:0] PIC_W_OPEN5    = 10'd640, PIC_H_OPEN5    = 10'd360;
+localparam [9:0] PIC_W_OPEN6    = 10'd640, PIC_H_OPEN6    = 10'd360;
+localparam [9:0] PIC_W_CUT12    = 10'd640, PIC_H_CUT12    = 10'd360;
+localparam [9:0] PIC_W_CUT23_1  = 10'd640, PIC_H_CUT23_1  = 10'd360;
+localparam [9:0] PIC_W_CUT23_2  = 10'd640, PIC_H_CUT23_2  = 10'd360;
+localparam [9:0] PIC_W_CUT23_3  = 10'd640, PIC_H_CUT23_3  = 10'd360;
+localparam [9:0] PIC_W_END1     = 10'd640, PIC_H_END1     = 10'd360;
+localparam [9:0] PIC_W_END2     = 10'd640, PIC_H_END2     = 10'd360;
+localparam [9:0] PIC_W_END3     = 10'd640, PIC_H_END3     = 10'd360;
+localparam [9:0] PIC_W_END4     = 10'd640, PIC_H_END4     = 10'd360;
+localparam [9:0] PIC_W_END5     = 10'd640, PIC_H_END5     = 10'd360;
+localparam [9:0] PIC_W_END6     = 10'd640, PIC_H_END6     = 10'd360;
+localparam [9:0] PIC_W_END7     = 10'd640, PIC_H_END7     = 10'd360;
+localparam [9:0] PIC_W_END8     = 10'd640, PIC_H_END8     = 10'd360;
+localparam [9:0] PIC_W_END9     = 10'd640, PIC_H_END9     = 10'd360;
+function [19:0] pic_wh(input [4:0] id);
+    case (id)
+        5'd0 : pic_wh = {PIC_W_S1_ROOM, PIC_H_S1_ROOM};
+        5'd1 : pic_wh = {PIC_W_S2_ROOM, PIC_H_S2_ROOM};
+        5'd2 : pic_wh = {PIC_W_TITLE, PIC_H_TITLE};
+        5'd3 : pic_wh = {PIC_W_OPEN1, PIC_H_OPEN1};
+        5'd4 : pic_wh = {PIC_W_OPEN2, PIC_H_OPEN2};
+        5'd5 : pic_wh = {PIC_W_OPEN3, PIC_H_OPEN3};
+        5'd6 : pic_wh = {PIC_W_OPEN4, PIC_H_OPEN4};
+        5'd7 : pic_wh = {PIC_W_OPEN5, PIC_H_OPEN5};
+        5'd8 : pic_wh = {PIC_W_OPEN6, PIC_H_OPEN6};
+        5'd9 : pic_wh = {PIC_W_CUT12, PIC_H_CUT12};
+        5'd10: pic_wh = {PIC_W_CUT23_1, PIC_H_CUT23_1};
+        5'd11: pic_wh = {PIC_W_CUT23_2, PIC_H_CUT23_2};
+        5'd12: pic_wh = {PIC_W_CUT23_3, PIC_H_CUT23_3};
+        5'd13: pic_wh = {PIC_W_END1, PIC_H_END1};
+        5'd14: pic_wh = {PIC_W_END2, PIC_H_END2};
+        5'd15: pic_wh = {PIC_W_END3, PIC_H_END3};
+        5'd16: pic_wh = {PIC_W_END4, PIC_H_END4};
+        5'd17: pic_wh = {PIC_W_END5, PIC_H_END5};
+        5'd18: pic_wh = {PIC_W_END6, PIC_H_END6};
+        5'd19: pic_wh = {PIC_W_END7, PIC_H_END7};
+        5'd20: pic_wh = {PIC_W_END8, PIC_H_END8};
+        5'd21: pic_wh = {PIC_W_END9, PIC_H_END9};
+        default: pic_wh = 20'd0;
+    endcase
+endfunction
