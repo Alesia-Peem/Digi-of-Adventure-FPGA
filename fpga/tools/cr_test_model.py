@@ -342,6 +342,37 @@ def test_random_full_game():
           (steps, worst, ties, sorted(k for k in seen if not k.startswith(("mode", "message")))))
 
 
+# ---------------- scenarios (also the RTL stimulus) ----------------
+def test_routes_clear_every_level():
+    for stage in (1, 2, 3):
+        r = H.play("plan%d" % stage)
+        cleared = "mode %d stage %d" % (M.WIN if stage == 3 else M.CLEAR, stage)
+        done(r, cleared)
+        end = (stage, M.WIN) if stage == 3 else (stage + 1, M.PLAY)     # levels 1, 2 go on into the next one
+        assert (r.g.stage, H.MODES[r.g.mode]) == end == (r.m.stage, r.m.mode), \
+            "plan%d ends in stage %d mode %s at x=%.1f" % (stage, r.g.stage, r.g.mode, r.g.p.x)
+        assert (stage == 3) == r.m.exit_req
+
+
+def test_scenarios_match_the_game():
+    must = {"careless": {"chase"}, "skill": {"used", "retreat"}, "interview": {"interview"}, "pit": {"message 3"},
+            "lift": {"message 4"}, "timeout": {"message 2"}, "restart": {"message 3", "chase"},
+            "buttons": {"used", "mode 1 stage 3"}}
+    assert set(H.SCEN) == set(must) | {"plan1", "plan2", "plan3"}
+    for name, wanted in sorted(must.items()):
+        r = H.play(name)
+        done(r, *wanted)
+
+
+def test_stimulus_words_replay_the_same_run():
+    r = H.play("tea") if "tea" in H.SCEN else H.play("plan2")
+    again = H.Run(1)
+    for w in r.words:
+        again.word(w)
+    assert again.first_diff is None and again.trace == r.trace and len(r.trace) > 1000
+    assert all(len(row) == len(M.Model.HEADER) for row in r.trace)
+
+
 if __name__ == "__main__":
     failed = 0
     only = sys.argv[1:]

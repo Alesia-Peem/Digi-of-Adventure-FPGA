@@ -153,6 +153,7 @@ class Model:
         self.rng = Lfsr16(seed)
         self.stage = 1
         self.no_animals = False
+        self.no_lifts = False
         self.died = False
         self.exit_req = False
         self.restart()
@@ -182,8 +183,8 @@ class Model:
         self.lifts = [[163, 4 * Q, False, 1], [208, 5 * Q, True, 1]] if self.stage == 3 else []
         if self.stage == 2:
             self.extra.append((PUZZLE_X * F, PUZZLE_Y * F, Q * F, Q * F))
-        if self.no_animals:
-            self.lifts = []              # physics-only tests: no animals and no lifts
+        if self.no_lifts:
+            self.lifts = []              # physics-only tests
         self.extra += [self.lift_box(lift) for lift in self.lifts]
         # reporter: x in units, y and vy with VF fraction bits
         self.rx, self.ry, self.rvy, self.rdir = sx * Q, sy * Q * F, 0, 1
@@ -226,6 +227,32 @@ class Model:
             return 100
         spawn = SPAWNS[self.stage][0] * Q
         return min(max(100 * (self.px - spawn) // (DOORS[self.stage][0] - spawn), 0), 99)
+
+    HEADER = ("mode", "stage", "xf", "yf", "vyf", "gf", "vxf", "jumps", "elapsed", "grounded", "grace", "buffer",
+              "facing", "walking", "cam", "stride", "time_left", "skill", "used", "chase", "interview", "protection",
+              "follow", "retreat", "flash", "notice", "message", "gold", "opened", "tea_on", "tea_x", "tea_y",
+              "lift0", "lift1", "rep_x", "rep_y", "rep_dir", "rep_visible", "rep_walking", "q0", "q1", "progress",
+              "near", "grow", "exit", "lfsr", "ent_x", "ent_y", "ent_active", "ent_alive", "ent_exposure")
+
+    def snapshot(self):
+        """every value cr_core.v must reproduce after each step, in HEADER order"""
+        tea = self.tea or [0, 0, 0]
+        lifts = [lift[1] for lift in self.lifts] + [0, 0]
+        q = tuple(self.questions) + (0, 0)
+        ex = ey = active = alive = exposure = 0
+        for i, e in enumerate(self.ents):               # sums are modulo 2^32, weighted so swaps show
+            ex = (ex + (i + 1) * e.x) & 0xFFFFFFFF
+            ey = (ey + (i + 1) * e.y) & 0xFFFFFFFF
+            active |= int(e.active) << i
+            alive |= int(e.alive) << i
+            exposure = (exposure + (i + 1) * e.exposure) & 0xFFFFFFFF
+        return (self.mode, self.stage, self.xf, self.yf, self.vyf, self.gf, self.vxf, self.jumps, self.elapsed,
+                int(self.grounded), self.grace, self.buffer, self.facing, int(self.walking), self.cam, self.stride,
+                self.time_left, self.skill, int(self.used), int(self.chase), self.interview, self.protection,
+                self.follow, self.retreat, self.flash, self.notice, self.message, int(self.gold), int(self.opened),
+                int(self.tea is not None), tea[0], tea[1], lifts[0], lifts[1], self.rx, self.ry, self.rdir,
+                int(self.rvisible), int(self.rwalking), q[0], q[1], self.progress, int(self.near), self.grow,
+                int(self.exit_req), self.rng.q, ex, ey, active, alive, exposure)
 
     def teleport(self, x, y, grounded):
         self.xf, self.yf, self.vyf, self.grounded = x * F, y * F, 0, grounded

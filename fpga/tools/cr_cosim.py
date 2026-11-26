@@ -3,6 +3,7 @@
 
 A script is a list of (axis, jump, skill), one per 1/120 s step.
 """
+import json
 import os
 import random
 import sys
@@ -51,6 +52,7 @@ class Shim:
 
 def original(stage, physics_only=False, seed=M.SEED):
     """the float game at the start of a stage. physics_only: no animals and no lifts"""
+    tables()                  # build them first: doing so runs Game() too and would use up the shared draws
     G.random = Shim(seed)
     g = A.Game(A.load_maps())
     g.stage = stage
@@ -69,7 +71,7 @@ def _strip(g):
 def model(stage, physics_only=False, seed=M.SEED):
     m = M.Model(tables(), seed)
     m.stage = stage
-    m.no_animals = physics_only
+    m.no_animals = m.no_lifts = physics_only
     m.restart()
     return m
 
@@ -181,6 +183,8 @@ class Run:
         self.t, self.worst, self.first_diff, self.ties = 0, 0., None, []
         self.seen = set()
         self.late_notice = False
+        self.words, self.trace = [], []        # the stimulus given so far, the model's snapshot after each step
+        self.replayable = True                 # False once something happened that the words cannot express
         self.m.wakes = self.wakes
         if setup:
             setup(self.g, self.m)
@@ -200,6 +204,11 @@ class Run:
 
     def step(self, axis=0, jump=False, skill=False, menu=False):
         g, m = self.g, self.m
+        self.words.append((axis < 0) | (axis > 0) << 1 | bool(jump) << 2 | bool(skill) << 3 | bool(menu) << 4)
+        self._step(axis, jump, skill, menu)
+
+    def _step(self, axis, jump, skill, menu):
+        g, m = self.g, self.m
         if menu:
             if g.mode in ("play", "pause"):
                 g.mode = "pause" if g.mode == "play" else "play"
@@ -207,7 +216,32 @@ class Run:
         g.step(C.TICK, axis, jump, skill)
         m.step(axis, jump, skill)
         self.check()
+        self.trace.append(m.snapshot())
         self.t += 1
+
+    # ---- stimulus words: [0] left [1] right [2] jump [3] skill [4] menu; [8] command, [15:12] op, [31:16] arg
+    def command(self, op, arg=0):
+        """the demo/test commands cr_core has: they change state without taking a step"""
+        g, m = self.g, self.m
+        self.words.append(CMD | op << 12 | arg << 16)
+        if op == OP_STAGE:
+            g.stage = m.stage = arg
+            g.restart()
+            m.restart()
+        elif op == OP_PUT:                    # arg: x in half metres [8:0], y in half metres [13:9], standing [14]
+            teleport(g, m, (arg & 511) / 2, (arg >> 9 & 31) / 2, bool(arg >> 14 & 1))
+        elif op == OP_WIN:
+            m.confirm()
+        elif op == OP_GOLD:
+            g.gold = m.gold = True
+
+    def word(self, w):
+        if w & CMD:
+            self.command(w >> 12 & 15, w >> 16)
+        else:
+            # both direction bits held: the wrapper's axis is right - left = 0
+            self.words.append(w)
+            self._step((w >> 1 & 1) - (w & 1), bool(w >> 2 & 1), bool(w >> 3 & 1), bool(w >> 4 & 1))
 
     def check(self):
         (a, pa), (b, pb) = full_state(self.g), full_state_model(self.m)
@@ -257,8 +291,216 @@ class Run:
         raise AssertionError("situation not reached in %d steps (first diff: %s)" % (n, self.first_diff))
 
     def put(self, x, y, grounded=True):
-        teleport(self.g, self.m, x, y, grounded)
+        if x * 2 != int(x * 2) or y * 2 != int(y * 2) or not 0 <= y < 16:      # hardware takes half metres
+            teleport(self.g, self.m, x, y, grounded)
+            self.replayable = False
+        else:
+            self.command(OP_PUT, int(x * 2) | int(y * 2) << 9 | grounded << 14)
         return self
+
+
+CMD, OP_STAGE, OP_PUT, OP_SEED, OP_WIN, OP_GOLD = 1 << 8, 1, 2, 3, 4, 5
+ROUTES = os.path.join(HERE, "cr_routes.json")
+SIM = os.path.join(HERE, "..", "sim")
+
+
+# ---------------- route finding: a beam search on copies of the model ----------------
+def _clone(m):
+    c = M.Model.__new__(M.Model)
+    c.__dict__.update(m.__dict__)
+    c.extra, c.lifts = list(m.extra), [list(lift) for lift in m.lifts]
+    c.route, c.trail = m.route.copy(), m.trail.copy()
+    c.tea = None if m.tea is None else list(m.tea)
+    c.contacts, c.rng = set(m.contacts), M.Lfsr16(m.rng.q)
+    return c
+
+
+def find_route(stage, width=300, chunk=6):
+    """[(axis, jump)] per step that reaches the door, ignoring animals (they only pause the world)"""
+    start = M.Model(tables())
+    start.stage, start.no_animals = stage, True
+    start.restart()
+    moves = [(1, False), (1, True), (0, False), (0, True), (-1, False), (-1, True)]
+    beam = [(start, [])]
+    for depth in range(1400):
+        best = {}
+        for m, path in beam:
+            for axis, jump in moves:
+                c, steps = _clone(m), []
+                for k in range(chunk):
+                    c.step(axis, jump and k == 0)
+                    steps.append((axis, jump and k == 0))
+                    if c.died or c.mode != M.PLAY:
+                        break
+                if c.died:
+                    continue
+                if c.mode != M.PLAY:
+                    return path + steps
+                x = c.px
+                if stage == 2 and not c.gold:                    # fetch the tea before going on
+                    x = min(x, 243 * M.Q) if c.opened else min(x, 241 * M.Q)
+                    if not c.opened:
+                        x -= abs(c.px - 481 * M.Q // 2) // 4 if c.px > 236 * M.Q else 0
+                score = (c.gold, c.opened, x + (c.yf >> M.VF) // 4)
+                key = (c.px // (M.Q // 3), c.yf // (M.Q * M.F // 2), c.jumps, c.gold, c.opened,
+                       tuple(lift[1] // (M.Q // 2) for lift in c.lifts))
+                if key not in best or score > best[key][0]:
+                    best[key] = (score, c, path + steps)
+        beam = [(c, p) for _, c, p in sorted(best.values(), key=lambda v: v[0], reverse=True)[:width]]
+        if not beam:
+            break
+    raise AssertionError("no route through stage %d (best x %.1f)" % (stage, max(m.px for m, _ in beam) / M.Q if beam else -1))
+
+
+def routes():
+    """saved routes; searched once and stored in cr_routes.json"""
+    saved = {}
+    if os.path.isfile(ROUTES):
+        with open(ROUTES) as f:
+            saved = json.load(f)
+    changed = False
+    for stage in (1, 2, 3):
+        if str(stage) not in saved:
+            saved[str(stage)] = "".join("%d" % ((a + 1) * 2 + j) for a, j in find_route(stage))
+            changed = True
+    if changed:
+        with open(ROUTES, "w") as f:
+            json.dump(saved, f, indent=0)
+    return {int(k): [(int(c) // 2 - 1, bool(int(c) & 1)) for c in v] for k, v in saved.items()}
+
+
+# ---------------- scenarios ----------------
+def _surface(stage, col):
+    return tables()[stage][0][col].bit_length()
+
+
+def _plan(stage):
+    def run():
+        r = Run(1)
+        if stage != 1:
+            r.command(OP_STAGE, stage)
+        route, i = routes()[stage], 0
+        while r.m.mode == M.PLAY and not r.first_diff:
+            if r.m.interview:
+                r.step()                               # the world is frozen: the route waits
+                continue
+            axis, jump = route[i] if i < len(route) else (1, False)
+            r.step(axis, jump)
+            i += 1
+            assert i < len(route) + 600, "the route no longer reaches the door"
+        if stage == 3:
+            r.hold(5)
+            r.command(OP_WIN)
+            r.hold(5)
+        else:
+            r.hold(300)                                # clear screen, then the next level starts
+        return r
+    return run
+
+
+def _near_snail():
+    snail = tables()[1][2][0]
+    return Run(1).put(snail["x"] - 4, snail["y"])
+
+
+def _careless():
+    r = Run(1).hold(1500, 1)
+    return r
+
+
+def _skill():
+    r = _near_snail().until(lambda g: g.chase, 2000).hold(60, 1)
+    r.step(skill=True)
+    r.hold(700)
+    r.step(skill=True)                                 # already used
+    return r.hold(60)
+
+
+def _interview():
+    r = _near_snail().until(lambda g: g.chase, 2000).hold(100, 1).until(lambda g: g.interview > 0, 3000, -1)
+    return r.hold(900, 1)
+
+
+def _pit():
+    r = Run(1).hold(400, 1)
+    col = next(c for c in range(20, 240) if tables()[1][1][c])
+    return r.put(col + .5, 4, False).hold(500, 1)
+
+
+def _lift():
+    r = Run(1)
+    r.command(OP_STAGE, 3)
+    r.put(163, 4).hold(500)
+    r.put(208, 5).hold(250).hold(100, 1)               # ride the sinking one and walk off it
+    pit = next(c for c in range(20, 240) if not tables()[3][0][c])
+    return r.put(pit + .5, 1, False).hold(300, 1)      # a fall: "Fell!"
+
+
+def _timeout():
+    r = Run(1)
+    for _ in range(14500):
+        r.step()
+        if r.g.message.startswith("Time up"):
+            break
+    return r.hold(300, 1)
+
+
+def _restart():
+    r = _near_snail().until(lambda g: g.chase, 2000).hold(30)
+    col = next(c for c in range(20, 240) if tables()[1][1][c])
+    r.put(col + .5, 4, False).hold(500)
+    r.command(OP_STAGE, 2)
+    r.hold(200, 1)
+    r.put(240.5, 2).step(jump=True)                    # the ? block, then restart with the tea in flight
+    r.hold(70)
+    r.command(OP_STAGE, 2)
+    return r.hold(200, 1)
+
+
+def _buttons():
+    """both directions at once, jump + skill together, skill spam, pause with buttons held"""
+    r = Run(1)
+    r.command(OP_STAGE, 3)
+    r.hold(100)
+    for t in range(600):
+        if t % 97 == 13:
+            r.word(1 | 2 | 4 | 8)                      # left + right + jump + skill
+        else:
+            r.word((1 | 2) if t % 50 < 10 else 2 | (4 if t % 41 == 0 else 0))
+    r.step(menu=True)
+    for t in range(60):
+        r.step(1, t % 7 == 0, t % 11 == 0)
+    r.step(menu=True)
+    return r.hold(200, 1)
+
+
+SCEN = {"plan1": _plan(1), "plan2": _plan(2), "plan3": _plan(3), "careless": _careless, "skill": _skill,
+        "interview": _interview, "pit": _pit, "lift": _lift, "timeout": _timeout, "restart": _restart,
+        "buttons": _buttons}
+
+
+def play(name):
+    return SCEN[name]()
+
+
+def gen(name):
+    """write sim/cr_<name>_stim.mem and _expect.txt; True if the original game and the model agree"""
+    r = play(name)
+    assert r.replayable, "%s: uses a position the hardware commands cannot express" % name
+    os.makedirs(SIM, exist_ok=True)
+    with open(os.path.join(SIM, "cr_%s_stim.mem" % name), "w") as f:
+        f.writelines("%08X\n" % w for w in r.words)
+    with open(os.path.join(SIM, "cr_%s_expect.txt" % name), "w") as f:
+        f.writelines("%d %s\n" % (i, " ".join(str(v) for v in row)) for i, row in enumerate(r.trace))
+    print("cr %-10s %6d steps: %s  (worst %.3f mm, %d ties)" %
+          (name, r.t, "PASS" if not r.first_diff else "DIFF " + r.first_diff, r.worst, len(r.ties)))
+    return not r.first_diff
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["gen"]:
+        sys.exit(0 if all([gen(n) for n in (sys.argv[2:] or list(SCEN))]) else 1)
+    sys.exit("usage: cr_cosim.py gen [scenario ...]")
 
 
 def compare_animals(stage, steps, seed=1):
