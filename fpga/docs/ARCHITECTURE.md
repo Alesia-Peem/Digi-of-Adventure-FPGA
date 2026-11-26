@@ -93,6 +93,22 @@ latency (row of request k−1 readable via `rd_x` → `rd_rgb`, 2 clk, during li
 line L+60 after the next request), reads `rd_x` = x, and uses `bg_color` outside w × h. Every background (all modes) is
 then faded: channel → ⌊c · fade / 16⌋ (fade 0..16) before the display list is composed on top unfaded.
 
+**Flash pins (`qspi_io.v`).** The only Xilinx primitives of the design: SCK leaves through `STARTUPE2.USRCCLKO`
+(the CCLK pin has no user I/O), each `QSPI_DQ[i]` goes through an `IOBUF` (T = ~oe), `QSPI_CSN` is a plain
+output. Under `` `ifdef SIMULATION `` (all Icarus runs, `run_tests.sh` passes `-DSIMULATION`; Vivado never
+defines it) the module is behavioural and exposes the flash clock on `sim_sck`, which testbenches connect to
+`tb/flash_model.v` (`dut.u_qio.sim_sck`); in synthesis `sim_sck` = 0 and is left unconnected.
+
+**Screen sequence (`rtl/top/stage_mgr.v`).** `BOOT → OPEN → S1 → C12 → S2 → C23 → S3 → END → OPEN`. Stages
+leave with their `exit_req` (Stage 3: BTNC on the WIN screen, taken by the top from `C3_WIN`); the picture
+screens (placeholders until Phase 5: title, cutscene 1-2, cutscene 2-3, ending 1) leave on a BTNC tap. A change
+is requested, then applied in the next vblank: in that cycle the stage `*_enter` pulse fires, or, for a
+picture screen, `pic_load` + `pic_id` fire together with the switch to `bg_mode 5`. On a picture screen the
+top feeds the composer only condition 0 (no `IS_S1/2/3`), so the UI program draws nothing and the picture is
+shown alone. A BTNC press held across a transition does not act on the new screen. Demo menu 13/14 jump
+straight to a stage (no cutscene). The handoff (armor, shard, boost) is latched at the stage exit; `form`
+never decreases (≥ 1 after C12, ≥ 2 after C23).
+
 ## 5. Stage 1 game logic (`s1_core.v`)
 
 Per tick the sequencer runs exactly the order of `Game.update()`:
