@@ -172,6 +172,26 @@ def test_random_play():
     agree(out, "random play, 6000 steps each")
 
 
+def test_lfsr_is_the_verilog_one():
+    r = M.Lfsr16(0xACE1)
+    r.step()
+    assert r.q == 0x59C3                          # lfsr16.v: fb = q15 ^ q14 ^ q12 ^ q3
+    assert M.Lfsr16(0).q == 0xACE1
+    pairs = [M.Lfsr16(seed).pair(15) for seed in range(1, 2000)]
+    assert all(i != j and 0 <= i < 15 and 0 <= j < 15 for i, j in pairs)
+    assert len(set(pairs)) > 150, "question pairs hardly vary: %d of 210" % len(set(pairs))
+
+
+def test_animals_follow_the_game():
+    for stage in (1, 2, 3):
+        for steps in (14000, 6000):
+            r, st = H.compare_animals(stage, steps, seed=stage + steps)
+            assert not r.first_diff, "stage %d: %s" % (stage, r.first_diff)
+            print("      stage %d, %5d steps: worst %.3f mm, %d animals woke, %d hits, %d dead" %
+                  (stage, steps, r.worst_mm, len(st["woke"]), st["contacts"], st["dead"]))
+            assert len(st["woke"]) == len(H.tables()[stage][2]) and st["contacts"] > 0
+
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in list(globals().items()):

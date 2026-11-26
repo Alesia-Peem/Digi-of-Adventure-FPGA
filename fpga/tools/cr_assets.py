@@ -14,6 +14,7 @@ rtl/stage3/cr_consts.vh. Level index 0..2 = stage 1..3.
   cr_spr / cr_spal     4-bit pixels of all sprites back to back / 16 x 0xARGB per sprite (A = 0..15, the
                        sprite's own see-through-ness), stored facing right as drawn
   cr_stab              per sprite {width, height[7:0], offset[23:0]}
+  cr_edge              addr pattern*512+k, 1 bit: edge_bits() of the animals (ent field "edge" = pattern)
 Tiles are hard-edged at alpha 128 (decision D2); sprites keep their alpha in the palette.
 """
 import os
@@ -41,7 +42,8 @@ SPECIES = ("snail", "squirrel", "ant", "goose")
 MOTIONS = ("patrol", "walk", "fly", "pop")
 # (name, width) from bit 0 upwards; positions are signed units
 ENT_FIELDS = (("x", 32), ("y", 32), ("base_y", 32), ("lo", 32), ("hi", 32), ("trigger", 32),
-              ("species", 2), ("motion", 2), ("leader1", 6), ("active", 1), ("nskins", 3))
+              ("species", 2), ("motion", 2), ("leader1", 6), ("active", 1), ("nskins", 3),
+              ("edge", 7))             # edge: which cr_edge pattern
 
 _maps = None
 _tileset = None
@@ -96,6 +98,42 @@ def skins(stage):
         return {k: list(v) for k, v in C.ANIMALS.items()}
     table = C.STAGE_ONE_ANIMALS if stage == 1 else C.STAGE_THREE_ANIMALS
     return {k: [n for n in names if (C.ASSETS / n).is_file()] or list(C.ANIMALS[k]) for k, names in table.items()}
+
+
+# ---------------- which side of a mark the float game is on ----------------
+EDGE_MARKS = 512          # more than 14400 steps / 30
+_edges = {}
+
+
+def edge_bits(stage):
+    """one int per animal. A walking or patrolling animal reaches a half-metre mark every 30 steps, where the
+    exact position sits on a tile edge or a patrol bound and the game's float sum is 1e-13 to one side of it.
+    Bit k = at the k-th mark reached, the float is already past it: below a tile edge (whole metre), or beyond
+    the bound in the direction of travel (half metre). Recorded by running the game's own update_enemy()."""
+    if stage not in _edges:
+        g = Game(load_maps())
+        g.stage = stage
+        g.restart()
+        g.camera = 1e6                                   # everything awake
+        out = []
+        for e in g.enemies:
+            follower, e.leader = e.leader is not None, None
+            bits, k = 0, 0
+            if e.motion in ("walk", "patrol", "fly"):
+                for _ in range(60 if follower else C.TIME_LIMIT * 120):     # a follower only walks at first
+                    if not e.alive or e.waterline is not None:
+                        break
+                    raw, d = e.x + e.direction * C.ENEMY_SPEED * C.TICK, e.direction
+                    mark = round(raw * 2) / 2
+                    if abs(raw - mark) < 1e-6:
+                        if (raw < mark) if mark == int(mark) or d < 0 else (raw > mark):
+                            bits |= 1 << k
+                        k += 1
+                    g.update_enemy(e, C.TICK)
+            assert k <= EDGE_MARKS
+            out.append(bits)
+        _edges[stage] = out
+    return _edges[stage]
 
 
 # ---------------- tiles ----------------
@@ -266,10 +304,15 @@ def entity_fields(e, skin_lists):
     return out
 
 
+def _lsb(name):
+    names = [n for n, _ in ENT_FIELDS]
+    return sum(w for _, w in ENT_FIELDS[:names.index(name)])
+
+
 def pack_entity(fields):
     word, shift = 0, 0
     for name, width in ENT_FIELDS:
-        word |= (fields[name] & ((1 << width) - 1)) << shift
+        word |= (fields.get(name, 0) & ((1 << width) - 1)) << shift
         shift += width
     return word
 
@@ -312,6 +355,14 @@ def memories():
                 mp[base * 4096 + row * 256 + col] = flip << 8 | tid
         for i, e in enumerate(entities(stage)):
             ent[base * 64 + i] = pack_entity(entity_fields(e, skins(stage)))
+    patterns = []                                            # distinct edge_bits(), each stored once
+    for stage in (1, 2, 3):
+        for i, bits in enumerate(edge_bits(stage)):
+            if bits not in patterns:
+                patterns.append(bits)
+            ent[(stage - 1) * 64 + i] |= patterns.index(bits) << _lsb("edge")
+    assert len(patterns) <= 128, len(patterns)
+    out["edge"] = (1, [bits >> k & 1 for bits in patterns for k in range(EDGE_MARKS)])
     tiles, tpal = [], []
     for img in T.images:
         idx, pal = quantise(img)

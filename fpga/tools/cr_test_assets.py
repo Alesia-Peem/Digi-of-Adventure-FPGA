@@ -252,9 +252,13 @@ def test_mem_files():
             for col in range(250):
                 tid, flip = T.maps[s][row][col]
                 assert mp[(s - 1) * 4096 + row * 256 + col] == (flip << 8 | tid)
-        for i, e in enumerate(A.entities(s)):
-            word = ent[(s - 1) * 64 + i]
-            assert A.unpack_entity(word) == A.entity_fields(e, A.skins(s))
+        edge = read_mem("cr_edge.mem")
+        for i, (e, bits) in enumerate(zip(A.entities(s), A.edge_bits(s))):
+            got = A.unpack_entity(ent[(s - 1) * 64 + i])
+            want = A.entity_fields(e, A.skins(s))
+            pattern = got.pop("edge")
+            assert got == want
+            assert edge[pattern * 512:pattern * 512 + 512] == [bits >> k & 1 for k in range(512)], (s, i)
     for tid in (1, len(T.images) - 1):
         idx, pal = A.quantise(T.images[tid])
         assert tiles[tid * 1024:(tid + 1) * 1024] == list(idx.reshape(-1))

@@ -6,6 +6,7 @@ Numbers: lengths in units, 1 m = Q = 600*4096, so every horizontal speed is a wh
 The player's state (xf, yf, vxf, vyf, gf) carries VF = 8 more fraction bits: with whole-unit values one double
 jump could drift 2 mm (gravity) or reach a wall a step late (sideways speed). Speeds are per step, gravity per step per step. Timers are step counts.
 """
+from collections import deque
 from math import isqrt
 
 
@@ -35,6 +36,18 @@ DOUBLE_LAST = 134                        # a second jump is allowed while elapse
 MIN_RISE = Q // 50                       # 0.02 m
 SPAWNS = {1: (6, 3), 2: (5, 3), 3: (6, 3)}
 HALF_F, NEAR_F = HALF_W * F, NEAR * F
+SEED = 0xACE1
+
+# animals
+SPECIES = ("snail", "squirrel", "ant", "goose")
+PATROL, WALK, FLY, POP = range(4)
+ENEMY = 40960                            # 2 m/s per step
+ANIMAL_H = 2106514                       # 1.5 / 1.75 m, rounded
+HALF_GOOSE, HALF_OTHER = 1105920, 811008  # half of 0.9 m and 0.66 m
+WALK_G = 5120                            # 30 m/s^2 per step per step
+SINK_WATER = 57344                       # 2.8 m/s
+ANT_CYCLE, ANT_HIDDEN, ANT_RAMP = 720, 240, 120      # steps: hidden 2 s, rise 1, above 2, fall 1
+FOLLOW = 60                              # a follower is 0.5 s behind its leader
 
 
 def timer_steps(seconds, limit):
@@ -54,15 +67,58 @@ def timer_steps(seconds, limit):
     return n
 
 
+class Lfsr16:
+    """fpga/rtl/common/lfsr16.v. A draw advances it 16 times so consecutive draws share no bits."""
+
+    def __init__(self, seed=SEED):
+        self.q = seed or SEED
+
+    def step(self):
+        q = self.q
+        fb = (q >> 15 ^ q >> 14 ^ q >> 12 ^ q >> 3) & 1
+        self.q = ((q << 1 | fb) & 0xFFFF) or SEED
+
+    def choice(self, n):
+        for _ in range(16):
+            self.step()
+        return self.q * n >> 16
+
+    def pair(self, n):
+        """two different indices below n (random.sample of 2)"""
+        i = self.choice(n)
+        j = self.choice(n - 1)
+        return i, j + (j >= i)
+
+
+class Animal:
+    def __init__(self, e, skin):
+        u = lambda v: round(v * Q)
+        self.species = SPECIES.index(e["species"])
+        self.motion = ("patrol", "walk", "fly", "pop").index(e["motion"])
+        self.x, self.y, self.base_y = u(e["x"]), u(e["y"]), u(e["base_y"])
+        self.lo, self.hi, self.trigger = u(e["lo"]), u(e["hi"]), u(e["trigger"])
+        self.leader, self.active, self.alive = e["leader"], e["active"], True
+        self.skin, self.direction, self.vy = skin, -1, 0
+        self.age = 0                     # steps, saturates; only a follower needs "at least 61"
+        self.phase = 0                   # ant: steps into its 6 s cycle
+        self.exposure = 0 if self.motion == POP else ANT_RAMP
+        self.waterline = None
+        self.path = deque()              # follower: the leader's last 61 (x, y, direction)
+        self.edges, self.marks = e["edges"], 0     # cr_assets.edge_bits()
+
+
 COYOTE = timer_steps(.15, 0)
 BUFFER = timer_steps(.15, 0)
 
 
 class Model:
-    def __init__(self, tables):
-        """tables[stage] = (solid column words, water column words, entities)"""
+    def __init__(self, tables, seed=SEED):
+        """tables[stage] = (solid column words, water column words, entities with "nskins")"""
         self.tables = tables
+        self.rng = Lfsr16(seed)
         self.stage = 1
+        self.no_animals = False
+        self.died = False
         self.restart()
 
     def restart(self):
@@ -75,6 +131,9 @@ class Model:
         self.grace, self.buffer = 0, 0
         self.stride, self.cam = 0, 0
         self.extra = []                  # boxes outside the grid: (x, yf, width, heightf) - puzzle, lifts
+        ents = [Animal(e, self.rng.choice(e["nskins"])) for e in self.tables[self.stage][2]]
+        self.ents = [] if self.no_animals else ents
+        self.contacts = set()
 
     def teleport(self, x, y, grounded):
         self.xf, self.yf, self.vyf, self.grounded = x * F, y * F, 0, grounded
@@ -184,6 +243,114 @@ class Model:
     def head_bump(self, box):
         pass                                       # the "?" block: Task 5
 
+    # ---- animals (game.py update_enemy) ----
+    def surfaces(self, x):
+        """heights (units) of the solid tops with nothing above, in the column of x; highest first"""
+        c = x // Q
+        if not 0 <= c < WIDTH_M:
+            return []
+        m = self.solid[c] & ~(self.solid[c] >> 1)
+        return [(r + 1) * Q for r in range(HEIGHT_ROWS - 1, -1, -1) if m >> r & 1]
+
+    def update_animal(self, e):
+        early = 5 if (self.stage == 2 and e.motion in (WALK, FLY)) or (self.stage == 3 and e.motion == FLY) else 0
+        if self.cam + (20 + early) * Q >= e.trigger:
+            e.active = True
+        if not e.active:
+            return
+        e.age = min(e.age + 1, 127)
+        if e.leader >= 0:
+            leader = self.ents[e.leader]
+            e.path.append((leader.x, leader.y, leader.direction))
+            while len(e.path) > FOLLOW + 1:
+                e.path.popleft()
+            if len(e.path) == FOLLOW + 1:
+                e.x, e.y, e.direction = e.path[0]
+                return
+        if e.motion == POP:
+            e.phase = (e.phase + 1) % ANT_CYCLE
+            t = e.phase - ANT_HIDDEN
+            e.exposure = min(max(min(t, 4 * ANT_RAMP - t), 0), ANT_RAMP)     # up 1 s, stay 2 s, down 1 s
+            e.y = e.base_y - Q + e.exposure * (Q // ANT_RAMP)
+            return
+        if e.waterline is not None:
+            e.y -= SINK_WATER
+            e.alive = e.y + ANIMAL_H > e.waterline
+            return
+        old_x = e.x
+        e.x += e.direction * ENEMY
+        nudge = 0
+        if e.x % (Q // 2) == 0:                         # exactly on a mark: take the float game's side of it
+            if e.edges >> e.marks & 1:
+                nudge = -1 if e.x % Q == 0 else e.direction
+            e.marks = min(e.marks + 1, 511)
+        seen = e.x + nudge                              # what the comparisons below see
+        if e.motion == PATROL:
+            if seen < e.lo:
+                e.x, e.direction = 2 * e.lo - e.x, 1
+                seen = e.x
+            elif seen > e.hi:
+                e.x, e.direction = 2 * e.hi - e.x, -1
+                seen = e.x
+            reachable = [h for h in self.surfaces(seen) if abs(h - e.y) <= Q]
+            if reachable:
+                e.y = min(reachable, key=lambda h: abs(h - e.y))
+            else:
+                e.x, e.direction = old_x, -e.direction
+        if e.motion == WALK:
+            if e.vy == 0:
+                steps = [h for h in self.surfaces(seen) if 0 < h - e.y <= Q]
+                if steps:
+                    e.y = min(steps)
+            self.fall(e, seen)
+            c = seen // Q
+            if 0 <= c < WIDTH_M:
+                for r in range(HEIGHT_ROWS - 1, -1, -1):
+                    if self.water[c] >> r & 1 and r * Q <= e.y < (r + 1) * Q:
+                        e.waterline = (r + 1) * Q
+                        break
+        if seen < -3 * Q or e.y < -2 * Q:
+            e.alive = False
+
+    def fall(self, e, x):
+        """fall_item() onto the level's solids (walking animals)"""
+        old = e.y
+        e.vy -= WALK_G
+        e.y += e.vy
+        c = x // Q
+        if 0 <= c < WIDTH_M:
+            for r in range(HEIGHT_ROWS - 1, -1, -1):
+                top = (r + 1) * Q
+                if self.solid[c] >> r & 1 and old >= top and e.y <= top:
+                    e.y, e.vy = top, 0
+                    return
+
+    def animals(self):
+        contacts = set()
+        for i, e in enumerate(self.ents):
+            if not e.alive:
+                continue
+            self.update_animal(e)
+            if not e.alive or not e.active or not e.exposure or e.waterline is not None:
+                continue
+            half = (HALF_GOOSE if e.species == 3 else HALF_OTHER) * F
+            bottom = (e.base_y if e.motion == POP else e.y) * F
+            height = (ANIMAL_H * e.exposure // ANT_RAMP) * F
+            x = e.x * F
+            if (self.xf - HALF_F < x + half - TIE_X and self.xf + HALF_F > x - half + TIE_X
+                    and self.yf < bottom + height - TIE_F and self.yf + PH * F > bottom + TIE_F
+                    and not self.untouchable()):
+                contacts.add(i)
+                if i not in self.contacts:
+                    self.hit()
+        self.contacts = contacts
+
+    def untouchable(self):
+        return False                               # Phase: Task 5
+
+    def hit(self):
+        pass                                       # reporter: Task 5
+
     # ---- one step ----
     def step(self, axis=0, jump=False, skill=False):
         self.died = False
@@ -191,3 +358,5 @@ class Model:
         if self.yf < -Q * F or (not self.grounded and self.grace <= 0 and self.touches_water()):
             self.restart()
             self.died = True
+            return
+        self.animals()
