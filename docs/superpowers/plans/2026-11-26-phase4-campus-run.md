@@ -10,6 +10,19 @@
 
 **Spec:** `fpga/docs/audit/stage3_audit.md` (S3-#n = item n of its §6); behaviour = `onlystage_3/*.py`. Where they disagree, the Python wins.
 
+## Decisions (user accepted the recommendations, 2026-11-26)
+
+| # | Decision |
+|---|---|
+| D1 | Full 32×32 tiles, 4 bpp with 15 colours per tile; backdrops stream from QSPI flash at 704×352 |
+| D2 | Per-tile palettes, hard edges on tiles, bitmap fonts; cloak stays translucent; keep all effects, ask before dropping any |
+| D3 | Campus Run's own button mapping |
+| D4 | No hearts or items in Stage 3; Stage 2's handoff passes through unchanged |
+| D5 | No HOW TO PLAY screen (as the demo hub), so no `READY` mode |
+| D6 | Cutscenes stay in Phase 5 |
+
+Execution: native (this session), one fresh review of the whole branch at the end.
+
 ## Global Constraints
 
 - Source of truth is `onlystage_3/` on this branch. No gameplay is removed or simplified. The audit's `NEW/...` paths mean `onlystage_3/...`.
