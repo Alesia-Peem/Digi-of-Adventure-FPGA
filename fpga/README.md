@@ -31,6 +31,19 @@ or in the GUI: *Tools → Run Tcl Script…* → `fpga/vivado/create_project.tcl
 The project uses the `.mem` files in `fpga/mem/` (added as *Memory Initialization Files*).
 Board: **Nexys A7-100T**. Connect a VGA monitor, program the board, press BTNC to close the help screen.
 
+## Baseline run for the porting team
+
+Synthesis-only utilisation and timing baseline (needs the project from `create_project.tcl`; run from `fpga/`):
+
+```
+cd fpga
+vivado -mode batch -source vivado/create_project.tcl -tclargs 100t
+vivado -mode batch -source vivado/report_baseline.tcl
+```
+The script fails loudly if `synth_1` does not complete. It writes `fpga/docs/audit/util_baseline.txt`
+(hierarchical, per-instance RAMB36/RAMB18) and `fpga/docs/audit/timing_baseline.txt`. If you ran it on another
+machine, copy those two files into `fpga/docs/audit/` and replace the memory-budget estimates with the real numbers.
+
 ## Re-generate ROMs after changing art or screens
 
 ```
