@@ -49,8 +49,18 @@ echo "== 7. full design elaborates (top level)"
 $IV -o sim/build/top.vvp rtl/common/*.v rtl/video/*.v rtl/ui/*.v rtl/stage1/*.v rtl/stage2/*.v rtl/stage3/*.v \
   rtl/top/*.v && echo "top: elaborated"
 
+echo "== 8. QSPI picture streamer: pic_stream + qspi_reader vs the S25FL128S model (pixel exact vs previews)"
+[ -f mem/pictures.hex ] || python3 -I tools/pic_pack.py
+for late in 1 0; do
+  $IV -I rtl/video -Ptb_pic_stream.LATE=$late -o sim/build/tb_pic_stream.vvp \
+    rtl/video/qspi_reader.v rtl/video/pic_stream.v tb/flash_model.v tb/tb_pic_stream.v
+  vvp -n sim/build/tb_pic_stream.vvp | grep -E "TB_PIC_STREAM|FAIL|margin"
+  python3 -I tools/pic_check.py TITLE S2_ROOM
+  vvp -n sim/build/tb_pic_stream.vvp +ZERO | grep -E "TB_PIC_STREAM|FAIL|missing"
+done
+
 if [ "$1" != "quick" ]; then
-  echo "== 8. VGA frames: RTL video pipeline vs Python model (pixel exact) - takes a long time"
+  echo "== 9. VGA frames: RTL video pipeline vs Python model (pixel exact) - takes a long time"
   python3 -I tools/frame_check.py pick full
   $IV -o sim/build/tb_frame.vvp rtl/common/*.v rtl/stage1/*.v rtl/video/*.v rtl/ui/ui_composer.v tb/tb_frame.v
   vvp -n sim/build/tb_frame.vvp +STIM=sim/s1_full_stim.mem +SNAP=sim/frame_ticks.txt +OUTDIR=sim/frames | grep captured
