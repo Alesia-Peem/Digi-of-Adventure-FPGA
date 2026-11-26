@@ -105,12 +105,9 @@ Phases 2, 3 and 4 are independent once Phase 1 lands and can run in parallel (se
 - Test: `fpga/tools/test_pic_pack.py`
 
 **Interfaces:**
-- Produces flash image format (little-endian), loaded at flash byte offset `PIC_BASE = 24'h400000` (above the ~3.8 MB 100T bitstream):
-  - `0x000`: magic `"CPEP"` (4 B), `u16 count`, `u16 version=1`
-  - `0x008 + 16·i`: `u32 data_off, u16 w, u16 h, u16 pal_off_div16, u16 flags (bit0 = 8bpp else 4bpp), u32 reserved`
-  - palette: 256 × `u16` 0x0RGB (4:4:4) per picture
-  - pixel data: row-major, one byte (8 bpp) per pixel, rows padded to 4 B
-- `pic_list.py` entries: title, `1.jpg`…`6.jpg`, `cutscene1_2.png`, `cut23_1..3.png`, `ending1..9.png`, S1 room (`finalexam.jpg` at the size `asset_convert.py` uses today), S2 room, Campus Run backdrops ×3 (704×352). Letterbox/resample exactly as Pygame `fit()` (FA §3: nearest for title/cut23, smooth for the rest).
+- Produces the flash image format documented in the `pic_pack.py` docstring (little-endian, offsets relative to `PIC_BASE = 0x400000`): `"CPEP"`, `u16 count`, `u16 version=1`; then 8 B per picture `{u32 off, u16 w, u16 h}`; at `off`: 256 × `u16` 0x0RGB palette, then `h` rows × `w` bytes of index (row y at `off + 512 + y*w`); pictures 256-byte aligned. `pic_map.vh` gives `PIC_BASE`, `PIC_COUNT`, `PIC_<NAME>` ids.
+- `pic_list.py` (22 pictures, id order = list order): S1_ROOM, S2_ROOM (640×358, same resize as the old `convert_bg`), TITLE, OPEN1-6, CUT12, CUT23_1-3, END1-9 (640×360, built with the game's own Pygame loaders at 960×540, then LANCZOS to 640×360).
+- **Status: DONE by the controller (commits 0835006..508d36a): PIC_PACK PASS, 5.08 MB.**
 
 - [ ] **Step 1: failing test** `test_roundtrip`: pack → unpack every picture → `max |orig_quantised − decoded| == 0`, header count == `len(pic_list.PICS)`, total size < `16 MiB − PIC_BASE`.
 - [ ] **Step 2:** `test_psnr`: decoded vs original RGB PSNR ≥ 30 dB for photos, ≥ 36 dB for flat art (FA §5.1 values).
@@ -128,10 +125,14 @@ Phases 2, 3 and 4 are independent once Phase 1 lands and can run in parallel (se
 
 **Interfaces:**
 - `qspi_reader(clk, rst, start, addr[23:0], len[15:0], busy, data[7:0], data_valid, qspi_csn, qspi_sck, qspi_dq_i[3:0], qspi_dq_o[3:0], qspi_dq_oe)` — SCK = clk/2 (50 MHz), one `0x6B` command per burst.
-- `pic_stream(clk, rst, pix_ce, pic_id[4:0], x_off[10:0], y_off[9:0], line_req, line_y[9:0], rd_x[9:0], rd_rgb[11:0], ready, missing)` — on `line_req` it fetches line `line_y+y_off` starting at `x_off` into a ping-pong 2×1024×8 line buffer (2 RAMB18) and maps through a 256×12 palette RAM loaded on `pic_id` change. `missing=1` when magic ≠ `"CPEP"`.
+- `pic_stream(clk, rst, pic_id[4:0], pic_load, row_req, src_row[9:0], rd_x[9:0], rd_rgb[11:0], busy, missing, + qspi pins)`:
+  - `pic_load` pulse (in vblank): read the header entry of `pic_id` (off, w, h) and its 256-entry palette into a 256×12 palette RAM. Also checks the magic once after reset; `missing=1` when it is not `"CPEP"` (flash not programmed or quad mode not enabled).
+  - `row_req` pulse with `src_row`: fetch row `src_row` of the current picture (all `w` bytes, `w ≤ 1024`) into the *back* half of a ping-pong 2×1024×8 row buffer; the halves swap on the next `row_req`. If `src_row` equals the row already in the front half, no fetch (Stage 1 shows each source row on 2 screen lines).
+  - `rd_x` → `rd_rgb` = palette[front_row[rd_x]], 2-cycle latency like the existing `rom_sync` + palette path in `line_renderer.v:600-603`.
+  - Why whole rows: Stage 2 zooms (`bg_mode 2`, source x = `zoom_ox + screen_x * zoom_inv`), Stage 1 scrolls with a camera; both need random x within one source row, never more than one row per screen line.
 - Top-level instantiates `STARTUPE2` (`USRCCLKO = qspi_sck`, `USRCCLKTS = 0`) inside `cpe_escape_top.v` only — never in the TB (TB connects `qspi_sck` directly to the model).
 
-- [ ] **Step 1: failing TB** `tb_pic_stream`: for pic 0 and a 704-wide backdrop at `x_off = 117`, request all 360 lines at real VGA line rate; dump RGB to `sim/frames/pic_XX.ppm`; `python3 -I fpga/tools/frame_check.py pic` compares to the packer preview → expect FAIL (module absent).
+- [ ] **Step 1: failing TB** `tb_pic_stream`: with `fpga/mem/pictures.hex` in the flash model, for `PIC_TITLE` and `PIC_S2_ROOM`: `pic_load`, then for each row 0..h-1 issue `row_req` at the real VGA line period (800 × 4 clocks = 3200 cycles of 100 MHz), wait for the swap, read `rd_x` 0..w-1 and write RGB to `sim/frames/pic_<NAME>.ppm`; a small Python check (`fpga/tools/pic_check.py`) compares each .ppm to `fpga/mem/preview/pic_<NAME>.png` → expect FAIL (module absent).
 - [ ] **Step 2:** TB `test_missing`: flash model loaded with zeros → `missing == 1` within 1 ms, renderer shows the "PICTURES MISSING" stripe pattern (Review Focus 1).
 - [ ] **Step 3:** implement `qspi_reader` then `pic_stream`.
 - [ ] **Step 4:** Line budget check in TB: worst-case fetch (seek + 640 B) finishes in < 1 VGA line (32 µs): assert `busy` low before the next `line_req`. 640 B at 25 MB/s ≈ 25.6 µs + ~0.4 µs command — record the measured margin.
@@ -144,7 +145,7 @@ Phases 2, 3 and 4 are independent once Phase 1 lands and can run in parallel (se
 - Modify: `fpga/tools/frame_check.py` (frame model learns `BG_PIC` + fade)
 - Test: extend `fpga/tb/tb_frame.v` with scene `pic_title` and `pic_fade8`.
 
-**Interfaces:** Consumes Task 4 `pic_stream`. Produces display-list opcode/field `BG_PIC(pic_id, x_off, y_off, fade)` used by Phase 5 screens and Task 7.
+**Interfaces:** Consumes Task 4 `pic_stream`. New `bg_mode 5` = full-screen picture 1:1 (src_row = game row, rd_x = game x), with `fade[4:0]` (0..16, 16 = full) scaling the background colour for fade-from-black. Task 7 re-points `bg_mode 1/2` at the same stream. New top-level inputs to `line_renderer`: `pic_rgb[11:0]` and outputs `pic_row_req`, `pic_src_row[9:0]`, `pic_rd_x[9:0]`.
 
 - [ ] Steps: failing frame test → implement → frame-exact PASS → commit.
 
@@ -160,7 +161,7 @@ Phases 2, 3 and 4 are independent once Phase 1 lands and can run in parallel (se
 ### Task 7: Move room backgrounds to flash
 
 **Files:**
-- Modify: `fpga/tools/asset_convert.py` (stop emitting `bg_s1*.mem`; emit S1 room into `pic_list`), `fpga/rtl/top/cpe_escape_top.v` (remove `u_bg1` ROM, feed `BG_PIC` with `x_off/y_off` = camera), same for `bg_s2` **if** Task 2 shows it is needed.
+- Modify: `fpga/tools/asset_convert.py` (stop emitting `bg_s1*.mem` and `bg_s2*.mem`; both rooms are already in `pic_list`), `fpga/rtl/video/line_renderer.v` (remove `u_bg1`, `u_bg2`, `u_p1`, `u_p2`; `bg_mode 1/2` compute `sy` as today and request that source row from the stream, read `sx` via `pic_rd_x`), `fpga/rtl/top/cpe_escape_top.v` (`pic_load` of `PIC_S1_ROOM` / `PIC_S2_ROOM` on stage entry). Ruling R5: both rooms move now (−84 RAMB36), not only bg_s1.
 - Test: existing `tb_frame.v` Stage 1 scenes.
 
 - [ ] **Step 1:** Re-baseline: frame-check S1 scenes must be **pixel-identical** to before except the palette change (256-colour vs 64-colour) — first regenerate the reference frames with the new palette in `frame_check.py`, then compare.
