@@ -89,6 +89,9 @@ Big pictures (rooms, cutscenes, endings) live in the QSPI flash at `PIC_BASE` = 
 `pic_load` (vblank) and fetches one whole row per `row_req` with a single `0x6B` quad read (`qspi_reader.v`,
 SCK 50 MHz, 640 B ≈ 2 650 clk < 3 200 clk per line) into a ping-pong 2 × 1024-byte row buffer (w ≤ 768 B = line budget): one line of
 latency (row of request k−1 readable via `rd_x` → `rd_rgb`, 2 clk, during line k); repeated rows are not re-fetched.
+`bg_mode 5` shows such a picture 1:1: `line_renderer` requests game row L at hcount 640 of VGA line L+58 (shown on
+line L+60 after the next request), reads `rd_x` = x, and uses `bg_color` outside w × h. Every background (all modes) is
+then faded: channel → ⌊c · fade / 16⌋ (fade 0..16) before the display list is composed on top unfaded.
 
 ## 5. Stage 1 game logic (`s1_core.v`)
 

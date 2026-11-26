@@ -38,6 +38,7 @@ module tb_frame3;
         .hsync(hs), .vsync(vs), .bg_mode(bg_mode), .bg_color(12'h000), .bg_color2(12'h000), .cam_x(11'd0),
         .cam_y(10'd0), .zoom_ox(12'd0), .zoom_oy(12'd0), .zoom_inv(17'd65536), .wire_src(270'd0), .src_val(28'd0),
         .wire_hl(7'd0), .hill_ph(hill_ph), .wave_ph(wave_ph), .s3_cam(cam_px),
+        .pic_rgb(12'h000), .pic_w(10'd0), .pic_h(10'd0), .fade(5'd16), .pic_row_req(), .pic_src_row(), .pic_rd_x(),
         .dl_we(dl_we), .dl_waddr(dl_waddr), .dl_wdata(dl_wdata), .tx_we(tx_we), .tx_waddr(tx_waddr),
         .tx_wdata(tx_wdata), .vga_r(r), .vga_g(g), .vga_b(b), .vga_hs(vhs), .vga_vs(vvs), .overflow(ovf));
 

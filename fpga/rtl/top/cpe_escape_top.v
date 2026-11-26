@@ -171,6 +171,8 @@ module cpe_escape_top #(
         .cam_x(cam_x), .cam_y(cam_y), .zoom_ox(on2 ? zox : 12'd0), .zoom_oy(on2 ? zoy : 12'd0),
         .zoom_inv(on2 ? zinv : 17'd65536), .wire_src(on2 ? wsrc : 270'd0), .src_val(sval), .wire_hl(on2 ? whl : 7'd0),
         .hill_ph(s3_hill), .wave_ph(s3_wave), .s3_cam(s3_cam),
+        // bg_mode 5 picture stream: tied off until pic_stream is wired in (Tasks 6/7)
+        .pic_rgb(12'h000), .pic_w(10'd0), .pic_h(10'd0), .fade(5'd16), .pic_row_req(), .pic_src_row(), .pic_rd_x(),
         .dl_we(dl_we), .dl_waddr(dl_waddr), .dl_wdata(dl_wdata),
         .tx_we(tx_we), .tx_waddr(tx_waddr), .tx_wdata(tx_wdata),
         .vga_r(VGA_R), .vga_g(VGA_G), .vga_b(VGA_B), .vga_hs(VGA_HS), .vga_vs(VGA_VS), .overflow(lr_ovf));

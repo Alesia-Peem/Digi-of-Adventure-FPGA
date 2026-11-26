@@ -46,7 +46,9 @@ module tb_frame;
     wire [3:0] r, g, b; wire vhs, vvs;
     line_renderer lr (.clk(clk), .rst(rst), .pix_ce(pix_ce), .hcount(hcount), .vcount(vcount), .active(active),
         .hsync(hs), .vsync(vs), .bg_mode({1'b0, bg_mode}), .bg_color(bg_color), .bg_color2(12'h000), .cam_x(cam_x),
-        .cam_y(cam_y), .dl_we(dl_we), .dl_waddr(dl_waddr), .dl_wdata(dl_wdata), .tx_we(tx_we), .tx_waddr(tx_waddr),
+        .cam_y(cam_y),
+        .pic_rgb(12'h000), .pic_w(10'd0), .pic_h(10'd0), .fade(5'd16), .pic_row_req(), .pic_src_row(), .pic_rd_x(),
+        .dl_we(dl_we), .dl_waddr(dl_waddr), .dl_wdata(dl_wdata), .tx_we(tx_we), .tx_waddr(tx_waddr),
         .tx_wdata(tx_wdata), .vga_r(r), .vga_g(g), .vga_b(b), .vga_hs(vhs), .vga_vs(vvs), .overflow(ovf));
 
     // ---------------------------------------------------------------- frame capture

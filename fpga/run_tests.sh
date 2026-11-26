@@ -34,11 +34,12 @@ expected_fail() {          # run "$@" with set -e in a subshell; a failure is re
 }
 with_timeout() {           # with_timeout SECONDS cmd...  (macOS has no GNU timeout by default)
   local secs=$1; shift
-  if command -v timeout > /dev/null 2>&1; then timeout "$secs" "$@"; return $?; fi
-  if command -v gtimeout > /dev/null 2>&1; then gtimeout "$secs" "$@"; return $?; fi
+  # pygame (SDL) turns SIGTERM into a QUIT event that a hung script never reads -> KILL 5 s after TERM
+  if command -v timeout > /dev/null 2>&1; then timeout -k 5 "$secs" "$@"; return $?; fi
+  if command -v gtimeout > /dev/null 2>&1; then gtimeout -k 5 "$secs" "$@"; return $?; fi
   "$@" &
   local pid=$!
-  ( sleep "$secs"; kill -TERM "$pid" 2> /dev/null ) > /dev/null 2>&1 &
+  ( sleep "$secs"; kill -TERM "$pid" 2> /dev/null && sleep 5 && kill -KILL "$pid" 2> /dev/null ) > /dev/null 2>&1 &
   local watcher=$!
   local rc=0
   wait "$pid" || rc=$?

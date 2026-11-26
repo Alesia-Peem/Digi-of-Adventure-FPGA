@@ -8,6 +8,8 @@
   python3 fpga/tools/frame_check.py cmp                -> renders the same fields with ui_compile's model,
                                                           compares pixel by pixel, writes sim/frames/cmp_<tick>.png
                                                           (left: RTL VGA output, right: model, red = different)
+  python3 fpga/tools/frame_check.py picgen             -> bg_mode 5 picture scenes for tb/tb_frame_pic.v
+  python3 fpga/tools/frame_check.py piccmp [scene..]   -> compares sim/frames/<scene>.ppm with the model
 """
 import glob
 import os

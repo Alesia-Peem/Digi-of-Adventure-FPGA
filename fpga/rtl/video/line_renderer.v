@@ -8,6 +8,9 @@
 //              2 Stage-2 room ROM, 1:1 or zoomed (src = zoom_o + screen * zoom_inv / 65536)
 //              3 Stage-3 sky: vertical gradient SKY0 -> SKY1 kept at 8 bit per channel, 2x2 ordered dither
 //                to the 4-bit DAC (the demo's gradient would otherwise show 4-bit bands) | 4 Stage-2 board
+//              5 full-screen picture streamed from the QSPI flash (pic_stream.v), 1:1; bg_color outside w x h
+//    The background colour (every mode) is then multiplied by fade/16 (floor per 4-bit channel, fade 0..16)
+//    for fade-from-black; the display list is composed on top unfaded (Pygame: faded picture, then UI).
 //  * Everything else (UI rectangles, circles, text, player sprite, cards, overlays) is a DISPLAY LIST
 //    of primitives (written once per frame by ui_composer during vblank). While line N is being
 //    shown, the engine walks the list and "paints" line N+1 into a line buffer, in list order, using
@@ -662,9 +665,48 @@ module line_renderer #(
     always @(posedge clk) if (pix_ce) bidx_r <= bidx;
     rom_sync #(.WIDTH(12), .DEPTH(64), .AW(6), .MEM_FILE(BP_FILE)) u_bpal (.clk(clk), .addr(bidx_r), .q(pc4));
 
-    // TODO bg_mode 5 (stub)
-    assign pic_rd_x = 10'd0;
-    always @(posedge clk) begin pic_row_req <= 1'b0; pic_src_row <= 10'd0; end
+    // ---- bg_mode 5: full-screen picture from pic_stream, 1:1 (src_row = game row, rd_x = game x).
+    //      pic_stream has ONE LINE of latency: after its k-th row_req the row of request k-1 is shown.
+    //      So the request for game row L is made in the hblank of VGA line L+58 and becomes readable at
+    //      the request of line L+59, i.e. for the whole of line L+60 = where game row L is scanned out.
+    //      Requests: hcount 640 (first blank pixel) of VGA lines 58..418, src_row = vcount - 58 clamped
+    //      to h-1 (the last request only makes row 359 resident). The fetch of a row has a full line.
+    //      rd_x -> rd_rgb is 2 clk, like rom_sync + palette above, so pic_rgb is sampled at ph == 1.
+    assign pic_rd_x = gx;
+    wire [9:0] preq_r = vcount - (GY0 - 10'd2);
+    wire       preq_v = (vcount >= GY0 - 10'd2) && (vcount <= GY0 + GH - 10'd2);
+    always @(posedge clk) begin
+        if (rst) begin pic_row_req <= 1'b0; pic_src_row <= 10'd0; end
+        else begin
+            pic_row_req <= pix_ce && (hcount == 10'd640) && preq_v && (bg_mode == 3'd5);
+            if (pix_ce && hcount == 10'd640)
+                pic_src_row <= (pic_h == 10'd0) ? 10'd0 : (preq_r >= pic_h) ? pic_h - 10'd1 : preq_r;
+        end
+    end
+    reg        pin_d;            // this pixel is inside the picture (w x h), registered with pix_ce
+    always @(posedge clk) if (pix_ce) pin_d <= (gx < pic_w) && (sgy < pic_h);
+    // fade (ruling R8): every background channel c -> floor(c * fade / 16), fade >= 16 = unchanged.
+    // Applied to the background only (all bg modes), before the display list is composed on top.
+    wire [4:0] fade_c = (fade > 5'd16) ? 5'd16 : fade;
+    function [3:0] fade4(input [3:0] c, input [4:0] f);
+        reg [8:0] m;
+        begin m = c * f; fade4 = m[7:4]; end
+    endfunction
+    function [11:0] fade12(input [11:0] c, input [4:0] f);
+        fade12 = {fade4(c[11:8], f), fade4(c[7:4], f), fade4(c[3:0], f)};
+    endfunction
+    reg [11:0] gcol_d;
+    reg [11:0] bsel;             // background colour of this pixel before the fade (valid at ph == 1)
+    always @* begin
+        case (bg_mode)
+            3'd0: bsel = bg_color;
+            3'd1: bsel = pc1;
+            3'd2: bsel = pc2;
+            3'd4: bsel = pc4;
+            3'd5: bsel = pin_d ? pic_rgb : bg_color;        // R9: outside the picture -> bg_color
+            default: bsel = gcol_d;
+        endcase
+    end
 
     reg sbank_d;
     reg [16:0] ent;
@@ -672,7 +714,6 @@ module line_renderer #(
     wire [8:0] mr = bgc[11:8] * ent[16:12];   // explicit 9-bit products
     wire [8:0] mg = bgc[7:4]  * ent[16:12];
     wire [8:0] mb = bgc[3:0]  * ent[16:12];
-    reg [11:0] gcol_d;
     always @(posedge clk) if (pix_ce) begin sbank_d <= sbank; gcol_d <= gcol; end
     // pipeline: c0 = pix_ce cycle (addresses), c1 = ROM/LB data, c2 = palette data, compose
     reg [2:0]  ph;           // cycles since pix_ce
@@ -698,13 +739,7 @@ module line_renderer #(
                 clr_v <= p_game;                       // clear the entry we just consumed
             end
             if (ph == 3'd1) begin                     // c2: palette available
-                case (bg_mode)
-                    3'd0: bgc <= bg_color;
-                    3'd1: bgc <= pc1;
-                    3'd2: bgc <= pc2;
-                    3'd4: bgc <= pc4;
-                    default: bgc <= gcol_d;
-                endcase
+                bgc <= fade12(bsel, fade_c);           // fade the background (R8)
             end
             if (ph == 3'd2) begin                     // c3: compose
                 cr_o <= sat4(mr, ent[11:8]);
