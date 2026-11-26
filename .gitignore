@@ -9,6 +9,7 @@ venv/
 fpga/sim/
 fpga/vivado/cpe_escape/
 fpga/vivado/reports/
+fpga/vivado/flash/
 
 # Windows/Office junk from the Drive export
 *:Zone.Identifier

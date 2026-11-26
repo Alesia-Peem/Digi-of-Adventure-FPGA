@@ -1,5 +1,8 @@
 # Verification
 
+> **Out of date in part:** these results are about the older game (`demo_py_old/`). Since the new game was
+> imported, the Stage 1 / 2 co-simulations fail as expected. Current state: `STATUS.md`, "Phase 0 status".
+
 Everything below was run with **Icarus Verilog 13.0** and Python 3.13 (pygame 2.6.1) on 2026-11-20.
 Run it all again with `cd fpga && ./run_tests.sh`.
 

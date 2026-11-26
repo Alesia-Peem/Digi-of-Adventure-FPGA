@@ -1,9 +1,59 @@
 # Project status, audit and decisions
 
-Date: 2026-11-20. **What is DONE is listed with how it was verified. Nothing here claims synthesis,
-timing or hardware results - Vivado has not been run yet (no Vivado on the development Mac).**
+**What is DONE is listed with how it was verified. Nothing here claims synthesis, timing or hardware
+results - Vivado has not been run yet (no Vivado on the development Mac).**
 
-## 1. Scope of this phase
+## Phase 0 status (2026-11-27)
+
+Phase 0 = import the new game, move the big pictures to the QSPI flash, add the screen sequence. Sections 1-4
+below were written on 2026-11-20 about the **older** game (now `demo_py_old/`); where they differ, this
+section is right.
+
+### Works and tested in simulation (Icarus Verilog only)
+
+* Puzzle maths (`tools/verify_puzzles.py`).
+* Shared modules (`tb/tb_units.v`).
+* Flash streamer `qspi_reader` + `pic_stream` against a behavioural flash model, including the "flash not
+  programmed" case (`tb/tb_pic_stream.v`).
+* Full-screen pictures from the flash (`bg_mode 5`, fade, display list on top), pixel exact
+  (`tb/tb_frame_pic.v`); the title picture through the whole top level (`tb/tb_top_pic.v`).
+* Screen sequence OPEN -> S1 -> C12 -> S2 -> C23 -> S3 -> END -> OPEN (`tb/tb_stage_mgr.v`).
+* Stage 1 / Stage 2 rooms read from the flash: whole VGA frames pixel exact (`./run_tests.sh frames12`, run
+  during Task 7; the test inputs come from `demo_py_old/`).
+* Stage 3 (old design): RTL bit-exact with the fixed-point model, model within 2 mm of `demo_py_old`.
+
+`./run_tests.sh quick` passed on 2026-11-27 (sections 4 and 5 reported the expected failures).
+
+### Not done
+
+* Stage 1 and Stage 2 still follow the **old** game. Their co-simulations against the new game
+  (`run_tests.sh` sections 4 and 5) are expected failures (`audit/baseline_failures.md`).
+* Stage 3 is the old design; **Campus Run is not ported**.
+* Title, cutscenes and ending are **single placeholder pictures** (no animation, no other slides).
+
+### Not verified
+
+* No synthesis, no implementation, no timing result, no bitstream.
+* No board result: flash programming, booting from flash, the `STARTUPE2` / `IOBUF` flash pins and the read
+  timing are untested. `make_flash.tcl` has only been run with a stand-in for `write_cfgmem` under `tclsh`.
+* **Open board risk - flash QUAD bit:** the `0x6B` read needs the flash's non-volatile QUAD bit. Vivado is
+  expected to set it when programming an x4 image (Trenz Electronic wiki; a web search summary also mentions a
+  bug about it in Vivado 2014.1/2014.2, AMD answer 61067, page not read), but this is not confirmed for our tool version or board. Symptom if the game
+  cannot read the flash: **diagonal magenta/black stripes** (`missing`). Since the x4 boot uses quad reads
+  too, a missing QUAD bit may instead show as "DONE LED stays off" (our inference).
+* **Open board risk - read timing:** `pic_stream` samples with `LATE_SAMPLE = 1` and 8 dummy clocks (flash
+  default latency code assumed). The XDC has no timing constraints for these pins.
+* BRAM about 49 of 135 RAMB36 is an **estimate**.
+* The full (non-quick) `./run_tests.sh` has not been run since Task 5. In particular the Stage 3 VGA frame
+  comparison has not been repeated after the later renderer changes.
+
+### Planned deviation from Pygame
+
+* **Crossfades become fades from black**: the streamer shows one picture at a time, so two pictures cannot be
+  blended. Not implemented yet: the renderer has a `fade` input, the top level holds it at full brightness
+  until Phase 5.
+
+## 1. Scope of the 2026-11-20 port (older game)
 
 | Part | Status |
 |---|---|
@@ -12,7 +62,7 @@ timing or hardware results - Vivado has not been run yet (no Vivado on the devel
 | FEATURE 2 character forms 1-4 (+ generated art for the secret form) | ported: form register, sprite selection, Stage-1 effects (speed ×1.2, +30 interaction range) |
 | FEATURE 3 LFSR, cards (3 rounds), inventory, item effects, hearts | ported, shared modules |
 | VGA engine (display list + line buffers), UI VM, fonts, asset ROMs | done, shared by all stages |
-| Board top, XDC, Vivado script, on-board demo menu (= demo_hub) | done; stage manager Stage 1 → 2 → 3 |
+| Board top, XDC, Vivado script, on-board demo menu (= demo_hub) | done; stage manager (now OPEN → S1 → C12 → S2 → C23 → S3 → END, `stage_mgr.v`) |
 | Stage 2 (Internship): all gameplay of `stage2_demo.py` | **ported**, simulated, matches Pygame tick by tick |
 | Stage 3 (Graduation obby): all gameplay and screens of `stage3_demo.py` | **ported**, simulated: model = Pygame (≤ 2 mm, same events), RTL = model bit-exact (state + every screen field) |
 
@@ -43,7 +93,7 @@ timing or hardware results - Vivado has not been run yet (no Vivado on the devel
 | `assets/finalexam.mem` | output of the old script, unused | left untouched |
 | Old files | **not deleted or modified**; the new project is the `fpga/` folder | |
 
-Pygame-side findings (not fixed - outside this phase, please confirm):
+Pygame-side findings of 2026-11-20 (about the older demos, now `demo_py_old/`):
 * `stage2_demo.py` declares `CHECKPOINTS`/`ACTIONS` but has no `start`, `get_handoff`, `jump_to`,
   `do_action`, `get_progress`; `demo_hub.py` will crash when switching to Stage 2.
 * `stage3_demo.py` is not a hub stage (creates its own window at import, no `Game.start/poll/draw`) and
@@ -81,9 +131,10 @@ Pygame-side findings (not fixed - outside this phase, please confirm):
 
 ## 5. Next phases
 
-1. **Vivado run** (synthesis, implementation, timing, bitstream) and the first test on the board.
+1. **Vivado run** (synthesis, implementation, timing, bitstream, flash image) and the first test on the board
+   (steps: `../README.md`).
    Expected first issues: BRAM ≈ 49 of 135 (estimate since the rooms moved to the flash, was ≈ 132; see
    ARCHITECTURE.md §3 memory budget) and the Stage 3 publish /
    physics states contain wide constant multiplies that may need a pipeline register for 100 MHz.
-2. If wanted: give `stage3_demo.py` the shared features (hearts, Speed Boost / Freeze, forms, sprite art)
-   in Pygame first, then port the change.
+2. Phases 1-6 of `docs/superpowers/plans/2026-11-26-new-game-port-roadmap.md` (new Stage 1 / 2 behaviour,
+   Campus Run, real title / cutscenes / endings).

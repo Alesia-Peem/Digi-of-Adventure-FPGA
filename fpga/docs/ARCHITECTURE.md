@@ -1,7 +1,8 @@
 # CPE Escape on FPGA - architecture
 
 Target: Digilent **Nexys A7-100T** (XC7A100T-1CSG324C), Vivado, Verilog-2001.
-Reference: the Pygame demos in `demo_py/` (Stage 1 = `stage1_demo.py` + `player_sprite.py` + `card_assets.py`).
+Reference: the Pygame game in `demo_py/`. Note: the Stage 1 / 2 logic described below was ported from the
+older demos (now in `demo_py_old/`) and does not follow the new game yet - see `STATUS.md`, "Phase 0 status".
 
 ## 1. The big picture
 
@@ -70,6 +71,17 @@ Why it is split like this:
 All BRAM figures are estimates (depth × width rounded to RAMB36 shapes) until the first Vivado run reports the
 real RAMB36/RAMB18 per instance. With the rooms in the flash the estimate fits the XC7A50T (75 BRAM36) as well;
 `create_project.tcl 50t` prints the estimate.
+
+### Flash memory map (16 MiB QSPI flash, built by `vivado/make_flash.tcl`)
+
+| byte address | contents | size |
+|---|---|---|
+| `0x000000` | FPGA bitstream (read by the FPGA at power-up, x4) | XC7A100T uncompressed: 30 606 304 bits = 3 825 788 B, ends below `0x3A6100` |
+| `0x3A6100`..`0x3FFFFF` | unused (about 360 KB) | |
+| `0x400000` = `PIC_BASE` | `mem/pictures.bin`: header "CPEP" + 22 pictures | 5 077 760 B, ends at `0x8D7B00` |
+| `0x8D7B00`..`0xFFFFFF` | free (room for more pictures) | about 7.4 MB |
+
+`PIC_BASE` is set in `tools/pic_pack.py` (-> `rtl/video/pic_map.vh`) and repeated in `vivado/make_flash.tcl`.
 
 ## 4. The display engine
 

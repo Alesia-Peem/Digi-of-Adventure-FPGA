@@ -108,3 +108,12 @@ set_property -dict { PACKAGE_PIN K18   IOSTANDARD LVCMOS33 } [get_ports { QSPI_D
 set_property -dict { PACKAGE_PIN L14   IOSTANDARD LVCMOS33 } [get_ports { QSPI_DQ[2] }]; #IO_L2P_T0_D02_14 Sch=qspi_dq[2]
 set_property -dict { PACKAGE_PIN M14   IOSTANDARD LVCMOS33 } [get_ports { QSPI_DQ[3] }]; #IO_L2N_T0_D03_14 Sch=qspi_dq[3]
 set_property -dict { PACKAGE_PIN L13   IOSTANDARD LVCMOS33 } [get_ports { QSPI_CSN }]; #IO_L6P_T0_FCS_B_14 Sch=qspi_csn
+
+## Booting from the QSPI flash (vivado/make_flash.tcl). Both lines are bitstream options: rebuild the .bit after
+## changing them.
+##   SPI_BUSWIDTH 4 : the FPGA reads its configuration over 4 data lines. Required, because write_cfgmem
+##                    -interface SPIx4 only accepts a bitstream built for a 4-bit bus.
+##   CONFIG_MODE    : tells Vivado (pin planning / DRC) that the board configures from a x4 SPI flash.
+## CONFIGRATE is left at the Vivado default (slow but safe), so booting takes a few seconds (estimate).
+set_property BITSTREAM.CONFIG.SPI_BUSWIDTH 4 [current_design]
+set_property CONFIG_MODE SPIx4 [current_design]
