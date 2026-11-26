@@ -19,9 +19,9 @@ create_project cpe_escape "$here/cpe_escape" -part $part -force
 set_property target_language Verilog [current_project]
 
 add_files [glob $fpga/rtl/common/*.v $fpga/rtl/video/*.v $fpga/rtl/ui/*.v $fpga/rtl/stage1/*.v $fpga/rtl/stage2/*.v $fpga/rtl/stage3/*.v $fpga/rtl/top/*.v]
-add_files [list $fpga/rtl/common/game_defs.vh $fpga/rtl/ui/ui_map.vh $fpga/rtl/stage2/s2_consts.vh $fpga/rtl/stage3/s3_consts.vh]
+add_files [list $fpga/rtl/common/game_defs.vh $fpga/rtl/ui/ui_map.vh $fpga/rtl/video/pic_map.vh $fpga/rtl/stage2/s2_consts.vh $fpga/rtl/stage3/s3_consts.vh]
 set_property file_type {Verilog Header} [get_files *.vh]
-set_property include_dirs [list $fpga/rtl/common $fpga/rtl/ui $fpga/rtl/stage2 $fpga/rtl/stage3] [current_fileset]
+set_property include_dirs [list $fpga/rtl/common $fpga/rtl/ui $fpga/rtl/stage2 $fpga/rtl/stage3 $fpga/rtl/video] [current_fileset]
 # memory initialisation files: referenced by file name only (MEM_DIR = "")
 add_files [glob $fpga/mem/*.mem]
 set_property file_type {Memory Initialization Files} [get_files *.mem]

@@ -7,8 +7,10 @@
 //             ├─ ui_composer (once per frame in vblank: screen program -> display list)
 //             ├─ vga_timing + line_renderer (display list + background ROM -> VGA pins)
 //             ├─ seven_seg (8 digits)        └─ LEDs / RGB LEDs
-//             ├─ s2_core (Stage 2 game logic) - the stage manager below runs one stage at a time
+//             ├─ s2_core (Stage 2 game logic)
 //             ├─ s3_core (Stage 3 graduation obby)
+//             ├─ stage_mgr (screen sequence OPEN -> S1 -> C12 -> S2 -> C23 -> S3 -> END, one stage at a time)
+//             ├─ pic_stream + qspi_io (full-screen pictures from the QSPI flash -> line_renderer bg_mode 5)
 //             └─ demo_menu (SW12 = on-board version of demo_hub.py: jump to checkpoints, actions)
 // Only one clock domain (100 MHz); the 25 MHz pixel rate is a clock ENABLE.
 `timescale 1ns/1ps
@@ -27,8 +29,12 @@ module cpe_escape_top #(
     output wire        CA, CB, CC, CD, CE, CF, CG, DP,
     output wire [7:0]  AN,
     output wire [3:0]  VGA_R, VGA_G, VGA_B,
-    output wire        VGA_HS, VGA_VS
+    output wire        VGA_HS, VGA_VS,
+    output wire        QSPI_CSN,        // S25FL128S configuration flash (pictures at PIC_BASE)
+    inout  wire [3:0]  QSPI_DQ          // (its SCK pin is reached through STARTUPE2 in qspi_io.v)
 );
+`include "pic_map.vh"
+`include "ui_map.vh"
     wire clk = CLK100MHZ;
     wire rst;
     reset_sync u_rst (.clk(clk), .rst_n_async(CPU_RESETN), .rst(rst));
@@ -50,48 +56,38 @@ module cpe_escape_top #(
     demo_menu u_demo (.clk(clk), .rst(rst), .on(demo_on), .gtick(gtick), .ev_u(ev_u), .ev_d(ev_d),
         .ev_tap(ev_tap), .sw(sw), .cmd(dm_cmd), .op(dm_op), .arg(dm_arg), .seg_chars(dm_seg));
 
-    // ------------------------------------------------------------ stage manager
-    // stage 1 -> (clear, BTNC) -> stage 2 (armor, shards, Speed Boost handed over) -> (clear, BTNC) -> stage 3
-    // Stage 3 is the last stage: like stage3_demo.py, BTNC on its win / time-up screen plays it again.
-    // Demo menu: 13 = go to Stage 1, 14 = go to Stage 2 (SW0 off) / Stage 3 (SW0 on), other commands go to
-    // the running stage.
-    reg  [1:0] stage;
-    reg  [1:0] boot;
-    reg        s1_enter, s2_enter, s3_enter, s1_help, s2_help;
-    reg  [1:0] h2_armor; reg h2_shard, h2_boost;
-    wire       s1_exit, s2_exit;
+    // ------------------------------------------------------------ stage manager (stage_mgr.v)
+    // OPEN (title) -> S1 -> C12 -> S2 -> C23 -> S3 -> END -> OPEN. Picture screens (placeholders until
+    // Phase 5) show their first picture via bg_mode 5 and leave on a BTNC tap; stages leave with exit_req
+    // (Stage 3: BTNC on its WIN screen; on the LOSE screen BTNC still plays it again). Screen changes are
+    // applied in vblank. Demo menu: 13 = go to Stage 1, 14 = go to Stage 2 (SW0 off) / Stage 3 (SW0 on),
+    // straight to the stage; other commands go to the running stage.
+    wire       frame_end;
+    wire       s1_exit, s2_exit, s3_exit;
     wire [1:0] h_armor, h_form, h2o_armor, h2o_form; wire h_shard, h_boost, h2o_shard, h2o_boost;
-    wire       top_cmd = dm_cmd && (dm_op == 4'd13 || dm_op == 4'd14);
-    always @(posedge clk) begin
-        if (rst) begin
-            boot <= 2'd0; s1_enter <= 1'b0; s2_enter <= 1'b0; s3_enter <= 1'b0; stage <= 2'd1;
-            s1_help <= 1'b1; s2_help <= 1'b1;
-            h2_armor <= 2'd0; h2_shard <= 1'b0; h2_boost <= 1'b0;
-        end else begin
-            s1_enter <= 1'b0; s2_enter <= 1'b0; s3_enter <= 1'b0;
-            if (boot != 2'd3) begin
-                boot <= boot + 2'd1;
-                if (boot == 2'd2) begin s1_enter <= 1'b1; s1_help <= 1'b1; end
-            end else if (stage == 2'd1 && s1_exit) begin
-                stage <= 2'd2; s2_enter <= 1'b1; s2_help <= 1'b1;
-                h2_armor <= h_armor; h2_shard <= h_shard; h2_boost <= h_boost;
-            end else if (stage == 2'd2 && s2_exit) begin
-                stage <= 2'd3; s3_enter <= 1'b1;
-            end else if (top_cmd && dm_op == 4'd13) begin
-                stage <= 2'd1; s1_enter <= 1'b1; s1_help <= 1'b0;
-            end else if (top_cmd && dm_op == 4'd14 && dm_arg[0]) begin
-                stage <= 2'd3; s3_enter <= 1'b1;
-            end else if (top_cmd && dm_op == 4'd14) begin
-                stage <= 2'd2; s2_enter <= 1'b1; s2_help <= 1'b0;
-                h2_armor <= 2'd0; h2_shard <= 1'b0; h2_boost <= 1'b0;
-            end
-        end
-    end
-    wire on1 = (stage == 2'd1), on2 = (stage == 2'd2), on3 = (stage == 2'd3);
+    wire [2:0] screen; wire on1, on2, on3, pic_on, boot, top_cmd;
+    wire       s1_enter, s2_enter, s3_enter, s1_help, s2_help, sm_pic_load;
+    wire [1:0] h2_armor, h3_armor, form; wire h2_shard, h2_boost, h3_shard, h3_boost;
+    wire [4:0] sm_pic_id;
+    wire [255:0] c3;
+    stage_mgr u_sm (
+        .clk(clk), .rst(rst), .vblank(frame_end), .gtick(gtick), .ev_tap(ev_tap & !demo_on), .btnc_lvl(lvl[4]),
+        .s1_exit(s1_exit), .s2_exit(s2_exit), .s3_exit(s3_exit),
+        .s1_armor(h_armor), .s1_shard(h_shard), .s1_boost(h_boost), .s1_form(h_form),
+        .s2_armor(h2o_armor), .s2_shard(h2o_shard), .s2_boost(h2o_boost), .s2_form(h2o_form),
+        .demo_cmd(dm_cmd), .demo_op(dm_op), .demo_arg(dm_arg), .top_cmd(top_cmd),
+        .screen(screen), .on1(on1), .on2(on2), .on3(on3), .pic_on(pic_on), .boot(boot),
+        .s1_enter(s1_enter), .s2_enter(s2_enter), .s3_enter(s3_enter), .s1_help(s1_help), .s2_help(s2_help),
+        .h2_armor(h2_armor), .h2_shard(h2_shard), .h2_boost(h2_boost),
+        .h3_armor(h3_armor), .h3_shard(h3_shard), .h3_boost(h3_boost), .form(form),
+        .pic_id(sm_pic_id), .pic_load(sm_pic_load));
+    // Stage 3 exit = BTNC tap on its WIN screen (s3_core's own exit_req is still 0: on WIN it restarts
+    // itself on the same tap, harmless because the manager leaves Stage 3 in the next vblank).
+    assign s3_exit = on3 && gtick && ev_tap && !demo_on && c3[C3_WIN];
     wire [4:0] lvl_g = demo_on ? 5'd0 : lvl;
     wire ok_ev = !demo_on;
 
-    wire [3071:0] f1, f2, f3; wire [255:0] c1, c2, c3;
+    wire [3071:0] f1, f2, f3; wire [255:0] c1, c2;
     wire [2:0]  bg3; wire [12:0] s3_cam; wire [7:0] s3_wave; wire [15:0] s3_hill; wire [39:0] s3_seg;
     wire [15:0] s3_led; wire [2:0] rgb16_3, rgb17_3;
     wire [1:0]  bg1; wire [2:0] bg2; wire [11:0] bgc1, bgc2; wire [10:0] cam_x; wire [9:0] cam_y;
@@ -133,22 +129,42 @@ module cpe_escape_top #(
 
     // the UI program needs to know which stage runs: conditions 252..254 (ui_spec.RESERVED)
     reg  [3071:0] fields; reg [255:0] conds;
+    // Picture screens / boot: conds = cond 0 only -> no IS_S1/2/3 block of the UI program runs -> the
+    // composer writes an empty display list (just END) -> the picture is shown alone.
+    wire stg = on1 || on2 || on3;
     always @(posedge clk) begin
         fields <= on1 ? f1 : on2 ? f2 : f3;
-        conds  <= (on1 ? c1 : on2 ? c2 : c3) | {1'b0, on1, on2, on3, 252'd0};
+        conds  <= stg ? ((on1 ? c1 : on2 ? c2 : c3) | {1'b0, on1, on2, on3, 252'd0}) : {255'd0, 1'b1};
     end
-    wire [2:0]  bg_mode  = on1 ? {1'b0, bg1} : on2 ? bg2 : bg3;
-    wire [11:0] bg_color = on1 ? bgc1 : bgc2;
-    wire [39:0] seg_ch   = on1 ? s1_seg : on2 ? s2_seg : s3_seg;
-    wire [15:0] st_led   = on1 ? s1_led : on2 ? s2_led : s3_led;
-    wire [2:0]  rgb16    = on1 ? rgb16_1 : on2 ? rgb16_2 : rgb16_3;
-    wire [2:0]  rgb17    = on1 ? rgb17_1 : on2 ? rgb17_2 : rgb17_3;
+    // picture screens: bg_mode 5 (fade 16, black outside the picture); boot: bg_mode 0 in black
+    wire [2:0]  bg_mode  = pic_on ? 3'd5 : boot ? 3'd0 : on1 ? {1'b0, bg1} : on2 ? bg2 : bg3;
+    wire [11:0] bg_color = !stg ? 12'h000 : on1 ? bgc1 : bgc2;
+    wire [39:0] seg_ch   = !stg ? {8{5'd12}} : on1 ? s1_seg : on2 ? s2_seg : s3_seg;   // 12 = blank digit
+    wire [15:0] st_led   = !stg ? 16'd0 : on1 ? s1_led : on2 ? s2_led : s3_led;
+    wire [2:0]  rgb16    = !stg ? 3'd0 : on1 ? rgb16_1 : on2 ? rgb16_2 : rgb16_3;
+    wire [2:0]  rgb17    = !stg ? 3'd0 : on1 ? rgb17_1 : on2 ? rgb17_2 : rgb17_3;
 
     // ------------------------------------------------------------ video
-    wire        pix_ce, active, hs, vs, line_start, frame_end;
+    wire        pix_ce, active, hs, vs, line_start;
     wire [9:0]  hcount, vcount;
     vga_timing u_vt (.clk(clk), .rst(rst), .pix_ce(pix_ce), .hcount(hcount), .vcount(vcount), .active(active),
         .hsync(hs), .vsync(vs), .line_start(line_start), .frame_end(frame_end));
+
+    // ---- pictures from the QSPI flash (pic_stream.v): stage_mgr loads them in vblank, the renderer asks
+    //      for one row per game line (bg_mode 5); picture size from pic_map.vh (generated by pic_pack.py)
+    wire        pic_row_req, ps_busy, ps_missing;
+    wire [9:0]  pic_src_row, pic_rd_x;
+    wire [11:0] pic_rgb;
+    wire [9:0]  pic_w, pic_h;
+    assign {pic_w, pic_h} = pic_wh(sm_pic_id);
+    wire        qspi_sck; wire [3:0] qspi_dq_o, qspi_dq_oe, qspi_dq_i;
+    pic_stream #(.PIC_BASE(PIC_BASE)) u_ps (
+        .clk(clk), .rst(rst), .pic_id(sm_pic_id), .pic_load(sm_pic_load), .row_req(pic_row_req),
+        .src_row(pic_src_row), .rd_x(pic_rd_x), .rd_rgb(pic_rgb), .busy(ps_busy), .missing(ps_missing),
+        .qspi_csn(QSPI_CSN), .qspi_sck(qspi_sck), .qspi_dq_i(qspi_dq_i), .qspi_dq_o(qspi_dq_o),
+        .qspi_dq_oe(qspi_dq_oe));
+    qspi_io u_qio (.sck(qspi_sck), .dq_o(qspi_dq_o), .dq_oe(qspi_dq_oe), .dq_i(qspi_dq_i), .dq(QSPI_DQ),
+        .sim_sck());   // simulation-only clock tap (testbenches read u_qio.sim_sck), unconnected here
 
     wire        dl_we, tx_we, cp_busy, dl_full, lr_ovf;
     wire [7:0]  dl_waddr; wire [63:0] dl_wdata; wire [11:0] tx_waddr; wire [6:0] tx_wdata;
@@ -171,8 +187,9 @@ module cpe_escape_top #(
         .cam_x(cam_x), .cam_y(cam_y), .zoom_ox(on2 ? zox : 12'd0), .zoom_oy(on2 ? zoy : 12'd0),
         .zoom_inv(on2 ? zinv : 17'd65536), .wire_src(on2 ? wsrc : 270'd0), .src_val(sval), .wire_hl(on2 ? whl : 7'd0),
         .hill_ph(s3_hill), .wave_ph(s3_wave), .s3_cam(s3_cam),
-        // bg_mode 5 picture stream: tied off until pic_stream is wired in (Tasks 6/7)
-        .pic_rgb(12'h000), .pic_w(10'd0), .pic_h(10'd0), .fade(5'd16), .pic_row_req(), .pic_src_row(), .pic_rd_x(),
+        // bg_mode 5: picture streamed by pic_stream (fade 16 = full brightness until Phase 5 fades)
+        .pic_rgb(pic_rgb), .pic_w(pic_w), .pic_h(pic_h), .fade(5'd16), .pic_row_req(pic_row_req),
+        .pic_src_row(pic_src_row), .pic_rd_x(pic_rd_x),
         .dl_we(dl_we), .dl_waddr(dl_waddr), .dl_wdata(dl_wdata),
         .tx_we(tx_we), .tx_waddr(tx_waddr), .tx_wdata(tx_wdata),
         .vga_r(VGA_R), .vga_g(VGA_G), .vga_b(VGA_B), .vga_hs(VGA_HS), .vga_vs(VGA_VS), .overflow(lr_ovf));
@@ -186,7 +203,8 @@ module cpe_escape_top #(
     // LED15 = demo menu on, LED14 = render/compose overflow (should never light), LED0..11 = stage 1 panel
     // LED15 = demo menu (stage 1 also), LED14 = render overflow in stage 1; stage 2 uses LED13-15 for QA tests
     // stage 3: LED0-9 distance bar, LED10 skill ready, LED11 skill used, LED12 reporter, LED13 interview
-    assign LED = (on1 || on3) ? {demo_on, lr_ovf | dl_full, st_led[13:0]} : st_led;
+    // picture screens: only LED15 (demo) / LED14 (overflow)
+    assign LED = on2 ? st_led : {demo_on, lr_ovf | dl_full, st_led[13:0]};
     // RGB LEDs are very bright: drive them only 1/16 of the time
     reg [3:0] pwm; always @(posedge clk) pwm <= pwm + 4'd1;
     wire dim = (pwm == 4'd0);
