@@ -192,10 +192,161 @@ def test_animals_follow_the_game():
             assert len(st["woke"]) == len(H.tables()[stage][2]) and st["contacts"] > 0
 
 
+# ---------------- flow: reporter, skills, lifts, tea, doors ----------------
+def done(run, *must_have):
+    assert not run.first_diff, run.first_diff
+    missing = [k for k in must_have if k not in run.seen]
+    assert not missing, "the scenario never showed: %s" % missing
+    print("      %5d steps, worst %.3f mm, %d ties" % (run.t, run.worst, len(run.ties)))
+
+
+def meet_snail():
+    """stand on the first snail's ground and wait for it to walk into us"""
+    snail = H.tables()[1][2][0]
+    r = H.Run(1).put(snail["x"] - 4, snail["y"])
+    return r.until(lambda g: g.chase, 2000)
+
+
+def test_chase_then_interview():
+    r = meet_snail().hold(100, 1).hold(100, -1)
+    r.until(lambda g: g.interview > 0, 3000)
+    done(r.hold(900), "chase", "interview", "message 10")
+
+
+def test_cloak_refused_without_chase():
+    r = H.Run(1).hold(200)
+    r.step(skill=True)
+    done(r.hold(10), "message 7")
+    assert not r.m.used
+
+
+def test_cloak_follow_then_retreat():
+    for walk in (0, 1, -1):
+        r = meet_snail().hold(60, walk)
+        r.step(skill=True)
+        done(r.hold(700), "follow", "retreat", "used")
+
+
+def test_phase_ignores_hits():
+    r = H.Run(3).put(14.5, surface(3, 14))
+    r.hold(100)
+    r.step(skill=True)
+    done(r.hold(900), "used")
+
+
+def test_lift_ride_both_kinds():
+    for column, top in ((163, 4.0), (208, 5.0)):
+        r = H.Run(3).put(column, top).hold(700)
+        assert abs(r.g.p.y - r.g.lifts[0 if column == 163 else 1].top) < .01, "fell off the lift"
+        done(r.hold(60, 1).hold(200))
+
+
+def test_tea_gold_growth():
+    h = ground_under(2, 240)
+    r = H.Run(2).put(240.5, h)
+    r.step(jump=True)
+    r.hold(120)
+    r.step(jump=True)
+    r.hold(40, 1).hold(300, 1).hold(500)
+    done(r, "opened", "gold", "message 8", "message 9")
+
+
+def test_door_stage2_needs_tea():
+    r = H.Run(2).put(247.5, surface(2, 247)).hold(60)
+    done(r, "message 14", "mode %d stage 2" % M.PLAY)
+    r.g.gold = r.m.gold = True
+    done(r.hold(400), "mode %d stage 2" % M.CLEAR, "mode %d stage 3" % M.PLAY, "message 6")
+
+
+def test_clear_to_next_level():
+    r = H.Run(1).put(236.5, 2).hold(5)
+    r.put(246.5, 2).hold(400)
+    done(r, "mode %d stage 1" % M.CLEAR, "mode %d stage 2" % M.PLAY, "message 5", "near", "message 11")
+
+
+def test_win_stage3():
+    r = H.Run(3).put(230.5, surface(3, 230)).hold(5)
+    r.put(247.5, surface(3, 247)).hold(100)
+    done(r, "mode %d stage 3" % M.WIN, "message 13")
+    r.m.confirm()
+    assert r.m.exit_req
+
+
+def test_timeout_at_14400():
+    r = H.Run(1)
+    for t in range(14405):
+        r.step()
+        if r.g.message.startswith("Time up"):
+            break
+    assert r.t == 14400, "timed out after %d steps" % r.t
+    done(r, "message 2", "interview")
+
+
+def test_restart_clears_everything():
+    for cause in ("chase", "interview", "tea", "lift"):
+        if cause == "lift":
+            r = H.Run(3).put(208, 5.0).hold(150)
+        elif cause == "tea":
+            r = H.Run(2).put(240.5, ground_under(2, 240))
+            r.step(jump=True)
+            r.hold(60)
+        else:
+            r = meet_snail()
+            if cause == "interview":
+                r.hold(100, 1).until(lambda g: g.interview > 0, 3000, -1).hold(50)
+        r.put(100.5, -2, False).hold(400)             # off the bottom: restart, then play on
+        done(r)
+
+
+def test_pause_in_each_mode():
+    r = meet_snail().hold(100, 1).until(lambda g: g.interview > 0, 3000, -1).hold(10)
+    r.step(menu=True)
+    r.hold(50, 1, jump=True)
+    r.step(menu=True)
+    done(r.hold(700), "interview")
+    r = H.Run(1).put(246.5, 2)
+    r.until(lambda g: g.mode == "clear", 100)
+    r.step(menu=True)                                 # ignored while clearing
+    done(r.hold(300), "mode %d stage 2" % M.PLAY)
+    r = H.Run(3).put(247.5, surface(3, 247)).hold(100)
+    r.step(menu=True)                                 # ignored on the win screen
+    done(r.hold(10), "mode %d stage 3" % M.WIN)
+
+
+def test_random_full_game():
+    seen, steps, worst, ties = set(), 0, 0., {}
+    for stage in (1, 2, 3):
+        for seed in range(8):
+            rng = random.Random(1000 * stage + seed)
+            r = H.Run(stage, seed=seed + 1)
+            axis = 1
+            for t in range(5000):
+                if rng.random() < .02:
+                    axis = rng.choice((1, 1, 1, 0, -1))
+                if t % 600 == 599:                    # jump ahead to see the whole level
+                    col = rng.randrange(8, 244)
+                    if r.g.mode == "play" and not r.g.interview and surface(stage, col):
+                        r.put(col + .5, surface(stage, col))
+                r.step(axis, rng.random() < .025, rng.random() < .004, rng.random() < .001)
+                if r.first_diff:
+                    break
+                if r.g.mode == "pause" and rng.random() < .05:
+                    r.step(menu=True)
+            assert not r.first_diff, "stage %d seed %d: %s" % (stage, seed, r.first_diff)
+            seen |= r.seen
+            for _, name in r.ties:
+                key = name.split(" of animal")[0]
+                ties[key] = ties.get(key, 0) + 1
+            steps, worst = steps + r.t, max(worst, r.worst)
+    print("      %d steps, worst %.3f mm; ties %s; seen: %s" %
+          (steps, worst, ties, sorted(k for k in seen if not k.startswith(("mode", "message")))))
+
+
 if __name__ == "__main__":
     failed = 0
+    only = sys.argv[1:]
     for name, fn in list(globals().items()):
-        if name.startswith("test_"):
+        if name.startswith("test_") and (not only or any(o in name for o in only)):
             try:
                 fn()
                 print("ok    %s" % name)

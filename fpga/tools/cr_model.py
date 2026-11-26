@@ -67,6 +67,41 @@ def timer_steps(seconds, limit):
     return n
 
 
+# ---------------- flow, reporter, skills, objects ----------------
+PLAY, PAUSE, CLEAR, WIN = range(4)
+(MSG_NONE, MSG_NEW, MSG_TIMEUP, MSG_SPLASH, MSG_FELL, MSG_STAGE2, MSG_STAGE3, MSG_NEED_CHASE, MSG_PICK_TEA,
+ MSG_TEA, MSG_REPORTER, MSG_NEAR1, MSG_NEAR2, MSG_NEAR3, MSG_NEED_TEA) = range(15)
+T_LIMIT = timer_steps(120, 0)
+T_NOTICE = timer_steps(2.0, 0)
+T_FLASH = timer_steps(.45, 0)
+T_PROTECT = timer_steps(.65, 0)
+T_PROTECT_AFTER = timer_steps(1.0, 0)
+T_SKILL = timer_steps(5, EPS)
+T_INTERVIEW = timer_steps(5, EPS)
+T_FOLLOW = timer_steps(.6, EPS)
+T_RETREAT = timer_steps(2.0, EPS)
+T_CLEAR = timer_steps(2.0, EPS)
+T_GROW = 360                             # tea: sprite 8 % bigger for 3 s
+QUESTIONS = 15
+ROUTE_OLD = 34                           # reporter delay 0.28 s: newest entry at least 34 steps old
+TRAIL = 512
+GAP = 2826240                            # 1.15 m
+GAP_STILL = 8 * Q // 5                   # 1.6 m
+NEAR_PLAYER = 17 * Q // 20               # 0.85 m
+RETREAT_STEP = 61440                     # 3 m/s
+FEET = Q // 50                           # 0.02 m
+TOL_Y, TOL_X = 128, 2                    # tolerances for comparisons in whole units
+LIFT_LOW, LIFT_HIGH = 3 * Q, 5 * Q
+LIFT_SPEED, SINK_SPEED = 16384, 12288    # 0.8 and 0.6 m/s
+PUZZLE_X, PUZZLE_Y = 240 * Q, 5 * Q
+TEA_VX, TEA_VY, TEA_G = 53248, 6 * Q // 120, 4096
+TEA_STOP = PUZZLE_X + 19 * Q // 10
+TEA_HALF, TEA_H = 5 * Q // 8, 17 * Q // 10
+# door: x, y, width, height
+DOORS = {1: (245 * Q, 2 * Q, 5 * Q, 23 * Q // 10), 2: (607518720, 2 * Q, 3 * Q // 2, 23 * Q // 10),
+         3: (246 * Q, 2 * Q, 4 * Q, 23 * Q // 10)}
+
+
 class Lfsr16:
     """fpga/rtl/common/lfsr16.v. A draw advances it 16 times so consecutive draws share no bits."""
 
@@ -119,9 +154,10 @@ class Model:
         self.stage = 1
         self.no_animals = False
         self.died = False
+        self.exit_req = False
         self.restart()
 
-    def restart(self):
+    def restart(self, message=MSG_NONE):
         self.solid, self.water = self.tables[self.stage][0], self.tables[self.stage][1]
         sx, sy = SPAWNS[self.stage]
         self.xf, self.yf, self.vyf = sx * Q * F, sy * Q * F, 0
@@ -134,6 +170,62 @@ class Model:
         ents = [Animal(e, self.rng.choice(e["nskins"])) for e in self.tables[self.stage][2]]
         self.ents = [] if self.no_animals else ents
         self.contacts = set()
+        # flow
+        self.mode, self.exit_req = PLAY, False
+        self.time_left, self.clear_left = T_LIMIT, 0
+        self.used, self.near, self.chase = False, False, False
+        self.skill = self.interview = self.protection = self.retreat = self.follow = 0
+        self.flash = self.grow = 0
+        self.questions = ()
+        self.gold, self.opened, self.tea = self.stage == 3, False, None      # tea = [x, y, vy]
+        # [column, top, sinking, direction]
+        self.lifts = [[163, 4 * Q, False, 1], [208, 5 * Q, True, 1]] if self.stage == 3 else []
+        if self.stage == 2:
+            self.extra.append((PUZZLE_X * F, PUZZLE_Y * F, Q * F, Q * F))
+        if self.no_animals:
+            self.lifts = []              # physics-only tests: no animals and no lifts
+        self.extra += [self.lift_box(lift) for lift in self.lifts]
+        # reporter: x in units, y and vy with VF fraction bits
+        self.rx, self.ry, self.rvy, self.rdir = sx * Q, sy * Q * F, 0, 1
+        self.rvisible, self.rwalking = True, False
+        self.route = deque([(0, sx * Q, sy * Q, 1, False, False)])   # (step, x, y, dir, walking, grounded)
+        self.trail = deque(maxlen=TRAIL)
+        self.now = 0                                                  # steps since the restart
+        self.notify(message)
+
+    def notify(self, message):
+        self.message, self.notice = message, T_NOTICE if message else 0
+
+    def new_game(self):
+        self.stage = 1
+        self.restart(MSG_NEW)
+
+    def pause_toggle(self):
+        if self.mode in (PLAY, PAUSE):
+            self.mode = PAUSE if self.mode == PLAY else PLAY
+
+    def confirm(self):
+        if self.mode == WIN:
+            self.exit_req = True
+
+    @property
+    def seconds(self):
+        return (self.time_left + 119) // 120
+
+    @property
+    def skill_digit(self):
+        return min(5, (self.skill + 119) // 120) if self.mode in (PLAY, PAUSE) else 0
+
+    @property
+    def question_index(self):
+        return int(self.interview <= T_INTERVIEW // 2)
+
+    @property
+    def progress(self):
+        if self.mode in (CLEAR, WIN):
+            return 100
+        spawn = SPAWNS[self.stage][0] * Q
+        return min(max(100 * (self.px - spawn) // (DOORS[self.stage][0] - spawn), 0), 99)
 
     def teleport(self, x, y, grounded):
         self.xf, self.yf, self.vyf, self.grounded = x * F, y * F, 0, grounded
@@ -241,7 +333,9 @@ class Model:
         self.cam = min(max(self.px - 7 * Q, 0), LEVEL_W - 20 * Q)
 
     def head_bump(self, box):
-        pass                                       # the "?" block: Task 5
+        if self.stage == 2 and not self.opened and box == (PUZZLE_X * F, PUZZLE_Y * F, Q * F, Q * F):
+            self.opened, self.tea = True, [PUZZLE_X + Q // 2, PUZZLE_Y + Q, TEA_VY]
+            self.notify(MSG_PICK_TEA)
 
     # ---- animals (game.py update_enemy) ----
     def surfaces(self, x):
@@ -252,9 +346,12 @@ class Model:
         m = self.solid[c] & ~(self.solid[c] >> 1)
         return [(r + 1) * Q for r in range(HEIGHT_ROWS - 1, -1, -1) if m >> r & 1]
 
+    def wakes(self, e, reach):
+        return reach >= e.trigger      # a method so the harness can settle exact float ties (cr_cosim.Run)
+
     def update_animal(self, e):
         early = 5 if (self.stage == 2 and e.motion in (WALK, FLY)) or (self.stage == 3 and e.motion == FLY) else 0
-        if self.cam + (20 + early) * Q >= e.trigger:
+        if not e.active and self.wakes(e, self.cam + (20 + early) * Q):
             e.active = True
         if not e.active:
             return
@@ -346,17 +443,238 @@ class Model:
         self.contacts = contacts
 
     def untouchable(self):
-        return False                               # Phase: Task 5
+        return self.stage == 3 and self.skill > 0  # Phase
+
+    # ---------------- boxes in whole units (reporter, tea, door) ----------------
+    def blocks_units(self, lo, hi):
+        """(x, y, width, height) of every block that could matter between lo and hi, in list order"""
+        for bx, by, bw, bh in self.boxes((lo - Q) * F, (hi + Q) * F):
+            yield bx >> VF, by >> VF, bw >> VF, bh >> VF
+
+    @staticmethod
+    def overlap(x, y, w, h, box):
+        bx, by, bw, bh = box
+        return x < bx + bw - TOL_X and x + w > bx + TOL_X and y < by + bh - TOL_Y and y + h > by + TOL_Y
+
+    def blocked(self, x, y, w, h):
+        return any(self.overlap(x, y, w, h, b) for b in self.blocks_units(x, x + w))
+
+    # ---------------- reporter (game.py:412-526) ----------------
+    def place_reporter(self, tx, ty, behind=False):
+        choices = []
+        for bx, by, bw, bh in self.blocks_units(tx - 11 * Q, tx + 11 * Q):
+            if bx > tx + 10 * Q or bx + bw < tx - 10 * Q:
+                continue
+            x = min(max(tx, bx + HALF_W), bx + bw - HALF_W)
+            if behind and (self.px - x) * self.facing < GAP - TOL_X:
+                continue
+            y = by + bh
+            score = 5 * abs(x - tx) + 8 * abs(y - ty)            # 5 x the game's score, exact
+            if abs(x - self.px) < NEAR_PLAYER:
+                score += 10 * Q
+            choices.append((score, x, y))
+        for _, x, y in sorted(choices):
+            if not self.blocked(x - HALF_W, y, 2 * HALF_W, PH):
+                self.rx, self.ry, self.rvy = x, y * F, 0
+                self.rdir = 1 if self.px >= x else -1
+                return True
+        return False
+
+    def record_route(self, moved):
+        self.route.append((self.now, self.px, self.yf >> VF, self.facing, moved and self.grounded, self.grounded))
+        while len(self.route) > 1 and self.route[1][0] <= self.now - ROUTE_OLD:
+            self.route.popleft()
+
+    def follow_reporter(self):
+        _, x, y, _, walking, grounded = self.route[0]
+        still = len(self.route) > 1 and abs(self.px - self.route[-2][1]) <= TOL_X
+        direction = self.facing
+        if still and GAP - TOL_X <= (self.px - self.rx) * direction <= GAP_STILL:
+            x = self.rx
+        if (self.px - x) * direction < GAP:
+            x = self.px - direction * GAP
+        self.rvisible = True
+        feet = (x - HALF_W, y - FEET, 2 * HALF_W, FEET)
+        unsupported = grounded and not self.blocked(*feet)
+        if unsupported or self.blocked(x - HALF_W, y, 2 * HALF_W, PH):
+            self.rvisible = self.place_reporter(x, y, behind=True)
+        else:
+            self.rx, self.ry = x, y * F
+        self.rdir = direction
+        self.rwalking = walking and not still
+
+    def remember_reporter(self):
+        now = (self.rx, self.ry >> VF, self.rdir)
+        if self.trail:
+            x, y, facing = self.trail[-1]
+            if (facing != self.rdir or (self.rx - x) * self.rdir < -TOL_X or abs(self.rx - x) > Q // 5
+                    or abs(now[1] - y) > 7 * Q // 20):
+                self.trail.clear()
+            elif abs(self.rx - x) <= TOL_X:
+                self.trail[-1] = now
+                return
+        self.trail.append(now)
+
+    def retreat_reporter(self):
+        old_x = self.rx
+        target = min(max(self.rx - self.rdir * RETREAT_STEP, HALF_W), LEVEL_W - HALF_W)
+        trail = self.trail
+        while len(trail) > 1 and (trail[-2][0] - target) * self.rdir >= 0:
+            trail.pop()
+        if len(trail) > 1:
+            x0, y0, _ = trail[-2]
+            x1, y1, _ = trail[-1]
+            height = y0 + (y1 - y0) * (target - x0) // (x1 - x0)
+            if not self.blocked(target - HALF_W, height, 2 * HALF_W, PH):
+                self.rx, self.ry, self.rvy = target, height * F, 0
+                self.rwalking = abs(self.rx - old_x) > TOL_X
+                return
+            trail.clear()
+        # not enough recorded ground: keep backing up under gravity, stop at walls
+        self.rx = target
+        y = self.ry >> VF
+        for bx, by, bw, bh in self.blocks_units(self.rx - 2 * Q, self.rx + 2 * Q):
+            if self.overlap(self.rx - HALF_W, y, 2 * HALF_W, PH, (bx, by, bw, bh)):
+                self.rx = max(self.rx, bx + bw + HALF_W) if self.rdir > 0 else min(self.rx, bx - HALF_W)
+        previous = self.ry
+        self.rvy -= G_F
+        self.ry += self.rvy
+        tops = [(by + bh) * F for bx, by, bw, bh in self.blocks_units(self.rx - Q, self.rx + Q)
+                if self.rx + HALF_W > bx + TOL_X and self.rx - HALF_W < bx + bw - TOL_X
+                and self.ry <= (by + bh) * F <= previous + TIE_F]
+        if tops:
+            self.ry, self.rvy = max(tops), 0
+        self.rwalking = abs(self.rx - old_x) > TOL_X
 
     def hit(self):
-        pass                                       # reporter: Task 5
+        if self.protection or self.interview or self.retreat or self.follow:
+            return
+        self.protection = T_PROTECT
+        if self.chase:
+            self.rvisible = self.place_reporter(self.px + self.facing * (13 * Q // 10), self.yf >> VF)
+            self.questions = self.rng.pair(QUESTIONS)
+            self.chase, self.interview = False, T_INTERVIEW
+            self.notify(MSG_NONE)
+        else:
+            self.chase, self.retreat = True, 0
+            self.trail.clear()
+            self.follow_reporter()
+            self.notify(MSG_REPORTER)
 
-    # ---- one step ----
+    def cast(self):
+        if self.used:
+            return
+        if self.stage == 3:                                # Phase
+            self.used, self.skill, self.flash = True, T_SKILL, T_FLASH
+            return
+        if not self.chase:
+            self.notify(MSG_NEED_CHASE)
+            return
+        self.chase = False                                 # Cloak
+        self.follow = T_FOLLOW
+        self.used, self.skill = True, T_SKILL
+
+    # ---------------- lifts, tea ----------------
+    @staticmethod
+    def lift_box(lift):
+        column, top = lift[0], lift[1]
+        return ((column - 1) * Q * F, (top - Q) * F, 2 * Q * F, Q * F)
+
+    def advance_lifts(self):
+        first = len(self.extra) - len(self.lifts)
+        for i, lift in enumerate(self.lifts):
+            column, top, sinking, direction = lift
+            riding = self.grounded and abs(self.yf - top * F) <= TIE_F and self.under(self.lift_box(lift))
+            if sinking:
+                direction = -1 if riding else 1
+            elif top >= LIFT_HIGH or top <= LIFT_LOW:
+                direction = -1 if top >= LIFT_HIGH else 1
+            speed = SINK_SPEED if sinking else LIFT_SPEED
+            new = min(max(top + direction * speed, LIFT_LOW), LIFT_HIGH)
+            lift[1], lift[3] = new, direction
+            if riding:
+                self.yf += (new - top) * F
+            self.extra[first + i] = self.lift_box(lift)
+
+    def move_tea(self):
+        x, y, vy = self.tea
+        x = min(TEA_STOP, x + TEA_VX)
+        old = y
+        vy -= TEA_G
+        y += vy
+        for bx, by, bw, bh in self.blocks_units(x - Q, x + Q):
+            if bx <= x < bx + bw and old >= by + bh - TOL_Y and y <= by + bh:
+                y, vy = by + bh, 0
+        self.tea = [x, y, vy]
+        if self.touches(((x - TEA_HALF) * F, y * F, 2 * TEA_HALF * F, TEA_H * F)):
+            self.gold, self.tea = True, None
+            self.grow = T_GROW
+            self.notify(MSG_TEA)
+
+    # ---- one step (game.py:528-630) ----
     def step(self, axis=0, jump=False, skill=False):
         self.died = False
-        self.move(axis, jump)
-        if self.yf < -Q * F or (not self.grounded and self.grace <= 0 and self.touches_water()):
-            self.restart()
+        if self.mode == CLEAR:
+            self.clear_left -= 1
+            if self.clear_left <= 0:
+                self.stage += 1
+                self.restart(MSG_STAGE2 if self.stage == 2 else MSG_STAGE3)
+            return
+        if self.mode != PLAY:
+            return
+        self.now += 1
+        self.grow = max(self.grow - 1, 0)
+        self.time_left -= 1
+        if self.time_left <= 0:
+            self.restart(MSG_TIMEUP)
             self.died = True
             return
+        self.notice = max(self.notice - 1, 0)
+        self.flash = max(self.flash - 1, 0)
+        if self.stage == 3 and self.skill == 1:            # Phase ends: flash
+            self.flash, self.skill = T_FLASH, 0
+        self.skill = max(self.skill - 1, 0)
+        self.protection = max(self.protection - 1, 0)
+        if self.interview:
+            self.interview -= 1
+            if not self.interview:
+                self.protection = T_PROTECT_AFTER
+            return
+        if skill:
+            self.cast()
+        last_x = self.xf
+        self.advance_lifts()
+        self.move(axis, jump)
+        if self.yf < -Q * F or (not self.grounded and self.grace <= 0 and self.touches_water()):
+            self.restart(MSG_FELL if self.stage == 3 else MSG_SPLASH)
+            self.died = True
+            return
+        if self.tea:
+            self.move_tea()
+        self.record_route(abs(self.xf - last_x) > TIE_X)
+        if self.chase or self.follow:
+            self.follow_reporter()
+            self.remember_reporter()
+            if self.follow:
+                self.follow -= 1
+                if not self.follow:
+                    self.retreat = T_RETREAT
+        elif self.retreat:
+            self.retreat_reporter()
+            self.retreat -= 1
+            if not self.retreat:
+                self.rvisible = False
         self.animals()
+        if self.progress >= 92 and not self.near:
+            self.near = True
+            self.notify(MSG_NEAR1 + self.stage - 1)
+        dx, dy, dw, dh = DOORS[self.stage]
+        if dx <= self.px <= dx + dw and self.touches((dx * F, dy * F, dw * F, dh * F)):
+            if self.stage < 3 and (self.stage == 1 or self.gold):
+                self.mode, self.clear_left = CLEAR, T_CLEAR
+                self.notify(MSG_NONE)
+            elif self.gold:
+                self.mode = WIN
+                self.notify(MSG_NONE)
+            else:
+                self.notify(MSG_NEED_TEA)

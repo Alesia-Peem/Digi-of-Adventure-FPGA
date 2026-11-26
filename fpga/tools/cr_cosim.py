@@ -6,6 +6,7 @@ A script is a list of (axis, jump, skill), one per 1/120 s step.
 import os
 import random
 import sys
+from math import ceil
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.dont_write_bytecode = True
@@ -116,6 +117,150 @@ def compare(script, stage, setup=None):
     return Report(worst, None, [], deaths)
 
 
+MESSAGES = {
+    "": 0, "New game": 1, "Time up!  Skill restored": 2, "Splash!  Skill restored": 3, "Fell!  Skill restored": 4,
+    "Stage 2   /   S4 to CB2": 5, "Stage 3   /   N17 to N16": 6, "Use Cloak when a reporter is following.": 7,
+    "Pick up the milk tea!": 8, "Tea Time Awakening! Superyasai Power: Phase Through Every Obstacle!": 9,
+    "A reporter is coming to interview you!": 10, "Just a little further to Red Building! You've got this!": 11,
+    "Almost at CB2! Keep pushing!": 12, "Graduation Ceremony is right ahead! Hang in there!": 13,
+    "Hit the ? block, then collect the milk tea.": 14}
+MODES = {"play": M.PLAY, "pause": M.PAUSE, "clear": M.CLEAR, "win": M.WIN}
+
+
+def full_state(g):
+    """(discrete things that must be identical, positions in metres that must be within 1 mm)"""
+    p = g.p
+    shown = bool(g.chase or g.cloak_follow or g.interview or g.retreat_left)
+    d = dict(mode=MODES[g.mode], stage=g.stage, grounded=bool(p.grounded), jumps=p.jumps, facing=p.direction,
+             chase=bool(g.chase), interview=g.interview > 0, follow=g.cloak_follow > 0, retreat=g.retreat_left > 0,
+             protected=g.protection > 0, used=bool(g.skill_used), digit=g.cloak_digit, flash=g.flash > 0,
+             message=MESSAGES[g.message], notice=g.notice > 0, gold=bool(g.gold), opened=bool(g.opened),
+             tea=g.tea is not None, near=bool(g.near_finish_seen), seconds=max(0, ceil(g.remaining)),
+             progress=g.progress, contacts=sorted(g.contacts), alive=[e.alive for e in g.enemies],
+             clearing=g.mode == "clear", question=g.question_index if g.interview else 0,
+             questions=[C.QUESTIONS.index(q) for q in g.questions], grown=g.time < g.tea_growth_until)
+    pos = {"player x": p.x, "player y": p.y}
+    if g.tea:
+        pos.update({"tea x": g.tea.x, "tea y": g.tea.y})
+    for i, lift in enumerate(g.lifts):
+        pos["lift %d" % i] = lift.top
+    if shown:
+        d.update(visible=bool(g.reporter_visible), reporter_facing=g.reporter.direction,
+                 reporter_walking=bool(g.reporter_walking))
+        if g.reporter_visible:
+            pos.update({"reporter x": g.reporter.x, "reporter y": g.reporter.y})
+    return d, pos
+
+
+def full_state_model(m):
+    shown = bool(m.chase or m.follow or m.interview or m.retreat)
+    d = dict(mode=m.mode, stage=m.stage, grounded=m.grounded, jumps=m.jumps, facing=m.facing,
+             chase=m.chase, interview=m.interview > 0, follow=m.follow > 0, retreat=m.retreat > 0,
+             protected=m.protection > 0, used=m.used, digit=m.skill_digit, flash=m.flash > 0,
+             message=m.message, notice=m.notice > 0, gold=m.gold, opened=m.opened,
+             tea=m.tea is not None, near=m.near, seconds=m.seconds, progress=m.progress,
+             contacts=sorted(m.contacts), alive=[e.alive for e in m.ents], clearing=m.mode == M.CLEAR,
+             question=m.question_index if m.interview else 0, questions=list(m.questions), grown=m.grow > 0)
+    pos = {"player x": m.x_units() / M.Q, "player y": m.y_units() / M.Q}
+    if m.tea:
+        pos.update({"tea x": m.tea[0] / M.Q, "tea y": m.tea[1] / M.Q})
+    for i, lift in enumerate(m.lifts):
+        pos["lift %d" % i] = lift[1] / M.Q
+    if shown:
+        d.update(visible=m.rvisible, reporter_facing=m.rdir, reporter_walking=m.rwalking)
+        if m.rvisible:
+            pos.update({"reporter x": m.rx / M.Q, "reporter y": m.ry / M.F / M.Q})
+    return d, pos
+
+
+class Run:
+    """one game and one model, stepped together; .check() after every step records the first difference"""
+
+    def __init__(self, stage, seed=M.SEED, setup=None):
+        self.g, self.m = original(stage, seed=seed), model(stage, seed=seed)
+        self.t, self.worst, self.first_diff, self.ties = 0, 0., None, []
+        self.seen = set()
+        self.late_notice = False
+        self.m.wakes = self.wakes
+        if setup:
+            setup(self.g, self.m)
+
+    def wakes(self, a, reach):
+        """TIE "wake-up": camera + 20 is exactly on the animal's trigger. The game's camera comes from a float x
+        that is 1e-14 short or over depending on the path taken, so the model is given the game's answer here
+        (and only here). The hardware uses >=."""
+        exact = reach >= a.trigger
+        if abs(reach - a.trigger) > 2:
+            return exact
+        i = next(i for i, other in enumerate(self.m.ents) if other is a)
+        answer = self.g.enemies[i].active                 # the game has already taken this step
+        if answer != exact:
+            self.ties.append((self.t, "wake-up of animal %d" % i))
+        return answer
+
+    def step(self, axis=0, jump=False, skill=False, menu=False):
+        g, m = self.g, self.m
+        if menu:
+            if g.mode in ("play", "pause"):
+                g.mode = "pause" if g.mode == "play" else "play"
+            m.pause_toggle()
+        g.step(C.TICK, axis, jump, skill)
+        m.step(axis, jump, skill)
+        self.check()
+        self.t += 1
+
+    def check(self):
+        (a, pa), (b, pb) = full_state(self.g), full_state_model(self.m)
+        for k, v in a.items():
+            if v and k in ("chase", "interview", "follow", "retreat", "used", "gold", "tea", "near", "opened"):
+                self.seen.add(k)
+        self.seen.add("message %d" % a["message"])
+        self.seen.add("mode %d stage %d" % (a["mode"], a["stage"]))
+        diff = ["%s game=%r model=%r" % (k, a.get(k), b.get(k)) for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)]
+        if diff == ["grown game=False model=True"] or diff == ["grown game=True model=False"]:
+            self.ties.append((self.t, "tea growth ends one step apart (sprite size only)"))
+            diff = []
+        # TIE "progress boundary": the player is exactly on a whole percent; the game's float x is 1e-12 short of
+        # it, so progress (and at 92 % the near-finish message) lags the integers by one step
+        keys = {d.split()[0] for d in diff}
+        m = self.m
+        span = M.DOORS[m.stage][0] - M.SPAWNS[m.stage][0] * M.Q
+        off = 100 * (m.px - M.SPAWNS[m.stage][0] * M.Q) % span
+        if "progress" in keys and keys <= {"progress", "near", "message", "notice"} and min(off, span - off) <= 200:
+            self.ties.append((self.t, "progress boundary"))
+            self.late_notice |= "near" in keys
+            diff = []
+        elif keys == {"notice"} and self.late_notice:
+            self.ties.append((self.t, "near-finish message ends one step apart"))
+            diff = []
+        for k in set(pa) & set(pb):
+            mm = 1000 * abs(pa[k] - pb[k])
+            self.worst = max(self.worst, mm)
+            if mm > 1:
+                diff.append("%s %.4f/%.4f" % (k, pa[k], pb[k]))
+        if diff and not self.first_diff:
+            self.first_diff = "step %d (stage %d): %s" % (self.t, a["stage"], "; ".join(diff[:6]))
+
+    def hold(self, n, axis=0, **kw):
+        for _ in range(n):
+            if self.first_diff:
+                break
+            self.step(axis, **kw)
+        return self
+
+    def until(self, what, n, axis=0):
+        """step until what(game) - fails loudly if the situation never happens"""
+        for _ in range(n):
+            if what(self.g) or self.first_diff:
+                return self
+            self.step(axis)
+        raise AssertionError("situation not reached in %d steps (first diff: %s)" % (n, self.first_diff))
+
+    def put(self, x, y, grounded=True):
+        teleport(self.g, self.m, x, y, grounded)
+        return self
+
+
 def compare_animals(stage, steps, seed=1):
     """drag both players along the level (so every animal wakes up and some are touched) and compare every
     animal on every step. hit() is only recorded here. Returns (Report, statistics)."""
@@ -123,6 +268,7 @@ def compare_animals(stage, steps, seed=1):
     g, m = original(stage), model(stage)
     g.blocks = g.blocks[:len(g.blocks) - len(g.lifts)]
     g.lifts = []
+    m.extra, m.lifts = m.extra[:len(m.extra) - len(m.lifts)], []
     hits = [0, 0]
     g.hit = lambda: hits.__setitem__(0, hits[0] + 1)
     m.hit = lambda: hits.__setitem__(1, hits[1] + 1)
