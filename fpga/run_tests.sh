@@ -103,8 +103,13 @@ while read -r name args; do
 done < sim/pic_scenes.txt
 python3 -I tools/frame_check.py piccmp
 
+echo "== 10. stage manager: OPEN -> S1 -> C12 -> S2 -> C23 -> S3 -> END -> OPEN (unit test)"
+$IV -I rtl/video -o sim/build/tb_stage_mgr.vvp rtl/top/stage_mgr.v tb/tb_stage_mgr.v
+vvp -n sim/build/tb_stage_mgr.vvp | grep -E "TB_STAGE_MGR|FAIL"
+vvp -n sim/build/tb_stage_mgr.vvp | grep -q "TB_STAGE_MGR: PASS"
+
 if [ "$1" != "quick" ]; then
-  echo "== 10. VGA frames: RTL video pipeline vs Python model (pixel exact) - takes a long time"
+  echo "== 12. VGA frames: RTL video pipeline vs Python model (pixel exact) - takes a long time"
   python3 -I tools/frame_check.py pick full
   $IV -o sim/build/tb_frame.vvp rtl/common/*.v rtl/stage1/*.v rtl/video/*.v rtl/ui/ui_composer.v tb/tb_frame.v
   vvp -n sim/build/tb_frame.vvp +STIM=sim/s1_full_stim.mem +SNAP=sim/frame_ticks.txt +OUTDIR=sim/frames | grep captured
