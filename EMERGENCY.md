@@ -15,8 +15,7 @@ Never work in the other stream's folder or edit its files.
 ## State when this was written
 
 - Phase 0 Tasks 1-7: done and reviewed, on GitHub.
-- Task 8 (flash script, README steps, STATUS page): files written but **uncommitted**, not reviewed.
-  Files: `fpga/vivado/make_flash.tcl` plus edits in README, nexys_a7.xdc, docs, .gitignore.
+- Task 8 (flash script, README steps, STATUS page): committed and pushed (`d55f132`), **not reviewed** yet.
 - After Task 8: one review of the whole Phase 0 branch.
 - Stage 3: second account has tools, model and player physics RTL commits, **not pushed to GitHub**.
 - Stage 1 and 2 still follow the old game. No Vivado, timing or board result exists.
@@ -47,9 +46,8 @@ First find the real state, before changing anything:
 Then tell me the state in a few simple lines.
 
 Next work, in order:
-1. Task 8: uncommitted changes may be in the tree. Read them, check them against
-   task-8-brief.md and ruling R17, test what can be tested, commit. Do not discard them.
-   Then have them reviewed.
+1. Task 8 (commit d55f132): review it against task-8-brief.md and ruling R17, unless the
+   ledger says that is already done.
 2. One review of all of Phase 0 (git diff 732a793..HEAD, code only) and fix real findings,
    including the deferred minors in the ledger that matter.
 3. Run cd fpga && ./run_tests.sh (full, not quick; it has not been run since Task 5).
