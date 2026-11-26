@@ -21,6 +21,12 @@
 | D5 | No HOW TO PLAY screen (as the demo hub), so no `READY` mode |
 | D6 | Cutscenes stay in Phase 5 |
 
+**Accepted ties (user, 2026-11-27, option A).** `onlystage_3/` is not changed. Where a value lands exactly on a
+boundary that depends on the player's float history, the game and the model may differ by one step: (1) an animal
+waking (`camera + 20 >= trigger`; it then stays 1.7 cm out), (2) `progress` on a whole percent (and the 92 %
+message), (3) the end of the tea growth (sprite size). Only these three; `cr_cosim.Run` names and counts them.
+The hardware uses exact integer comparisons.
+
 Execution: native (this session), one fresh review of the whole branch at the end.
 
 ## Global Constraints
