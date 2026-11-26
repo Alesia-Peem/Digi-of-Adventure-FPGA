@@ -448,8 +448,15 @@ class Assets:
         self.circ = rd("circ.mem")
         self.spr = rd("spr.mem")
         self.spal = rd("spr_pal.mem")
-        self.bg = {1: (np.array(rd("bg_s1.mem")).reshape(358, 640), rd("bg_s1_pal.mem")),
-                   2: (np.array(rd("bg_s2.mem")).reshape(358, 640), rd("bg_s2_pal.mem"))}
+        # Stage 1 / Stage 2 rooms (bg_mode 1 / 2) are streamed from the QSPI flash (pic_stream.v): the colours
+        # are the decoded 4:4:4 previews written by pic_pack.py. arr = 12-bit colour per pixel, pal = identity.
+        def room(name):
+            a = np.asarray(Image.open(os.path.join(mem, "preview", "pic_%s.png" % name)).convert("RGB"),
+                           dtype=np.int32)
+            assert a.shape == (358, 640, 3) and not np.any(a % 17), "pic_%s.png is not 640x358 4:4:4" % name
+            a = a // 17
+            return (a[:, :, 0] << 8) | (a[:, :, 1] << 4) | a[:, :, 2], list(range(4096))
+        self.bg = {1: room("S1_ROOM"), 2: room("S2_ROOM")}
         try:                                       # Stage 2 breadboard + wires (stage2_assets.py)
             tiles, bmap, bpal = rd("s2_btile.mem"), rd("s2_bmap.mem"), rd("s2_bpal.mem")
             img = np.zeros((360, 640), dtype=np.int32)

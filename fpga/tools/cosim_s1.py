@@ -20,7 +20,9 @@ from fractions import Fraction
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-sys.path.insert(0, os.path.join(ROOT, "demo_py"))
+# COSIM_DEMO=demo_py_old: the OLD game the current RTL was ported from (frame tests use its stimulus
+# until the Phase 2/3 scenarios exist); default = the new authoritative game in demo_py/
+sys.path.insert(0, os.path.join(ROOT, os.environ.get("COSIM_DEMO", "demo_py")))
 import pygame  # noqa: E402
 
 SIM = os.path.join(ROOT, "fpga", "sim")

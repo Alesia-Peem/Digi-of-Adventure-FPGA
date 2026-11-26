@@ -3,10 +3,14 @@
 // VGA frame as a PPM picture plus the UI fields/conditions used to build it.
 // fpga/tools/frame_check.py renders the same fields with the Python model of the UI engine and checks
 // that both pictures are identical pixel for pixel; it also writes side-by-side PNGs for inspection.
+// The room background comes from the QSPI flash: flash_model (mem/pictures.hex) -> qspi_reader ->
+// pic_stream -> line_renderer (pic_load of PIC_S1_ROOM once, in the first vblank after the magic check).
 //   plusargs: +STIM=sim/s1_full_stim.mem  +SNAP=sim/frame_ticks.txt (one tick number per line)
 //             +OUTDIR=sim/frames/
 `timescale 1ns/1ps
 module tb_frame;
+`include "pic_map.vh"
+    localparam integer FLASH_BYTES = 5077760;        // size of mem/pictures.hex
     reg clk = 0, rst = 1;
     always #5 clk = ~clk;
 
@@ -37,6 +41,33 @@ module tb_frame;
     wire [9:0]  hcount, vcount;
     vga_timing vt (.clk(clk), .rst(rst), .pix_ce(pix_ce), .hcount(hcount), .vcount(vcount), .active(active),
         .hsync(hs), .vsync(vs), .line_start(line_start), .frame_end(frame_end));
+    // flash + picture streamer (room background, bg_mode 1)
+    wire        qspi_csn, qspi_sck;
+    wire [3:0]  dq_o, dq_oe, dq_i, dq;
+    pullup (dq[0]); pullup (dq[1]); pullup (dq[2]); pullup (dq[3]);
+    assign dq[0] = dq_oe[0] ? dq_o[0] : 1'bz;
+    assign dq[1] = dq_oe[1] ? dq_o[1] : 1'bz;
+    assign dq[2] = dq_oe[2] ? dq_o[2] : 1'bz;
+    assign dq[3] = dq_oe[3] ? dq_o[3] : 1'bz;
+    assign dq_i = dq;
+    reg         pic_load = 1'b0;
+    wire        row_req, ps_busy, missing;
+    wire [9:0]  src_row, rd_x;
+    wire [11:0] rd_rgb;
+    pic_stream #(.PIC_BASE(PIC_BASE)) ps (
+        .clk(clk), .rst(rst), .pic_id(PIC_S1_ROOM), .pic_load(pic_load), .row_req(row_req), .src_row(src_row),
+        .rd_x(rd_x), .rd_rgb(rd_rgb), .busy(ps_busy), .missing(missing),
+        .qspi_csn(qspi_csn), .qspi_sck(qspi_sck), .qspi_dq_i(dq_i), .qspi_dq_o(dq_o), .qspi_dq_oe(dq_oe));
+    flash_model #(.BASE(PIC_BASE), .SIZE(FLASH_BYTES)) fm (.csn(qspi_csn), .sck(qspi_sck), .dq(dq));
+    integer n_load = 0, bad_req = 0;
+    always @(posedge clk) begin
+        if (row_req && src_row >= 10'd358) bad_req = bad_req + 1;
+        if (pic_load) n_load = n_load + 1;
+    end
+    initial begin                                  // the stage manager loads the room once, in vblank
+        @(negedge rst); wait (!ps_busy);
+        @(posedge frame_end); @(negedge clk); pic_load = 1'b1; @(negedge clk); pic_load = 1'b0;
+    end
     wire        dl_we, tx_we, busy, dl_full, ovf;
     wire [7:0]  dl_waddr; wire [63:0] dl_wdata; wire [11:0] tx_waddr; wire [6:0] tx_wdata;
     ui_composer #(.PROG_FILE("mem/ui_prog.mem"), .STR_FILE("mem/ui_str.mem"), .PTR_FILE("mem/ui_ptr.mem")) comp (
@@ -47,7 +78,8 @@ module tb_frame;
     line_renderer lr (.clk(clk), .rst(rst), .pix_ce(pix_ce), .hcount(hcount), .vcount(vcount), .active(active),
         .hsync(hs), .vsync(vs), .bg_mode({1'b0, bg_mode}), .bg_color(bg_color), .bg_color2(12'h000), .cam_x(cam_x),
         .cam_y(cam_y),
-        .pic_rgb(12'h000), .pic_w(10'd0), .pic_h(10'd0), .fade(5'd16), .pic_row_req(), .pic_src_row(), .pic_rd_x(),
+        .pic_rgb(rd_rgb), .pic_w(10'd640), .pic_h(10'd358), .fade(5'd16), .pic_row_req(row_req),
+        .pic_src_row(src_row), .pic_rd_x(rd_x),
         .dl_we(dl_we), .dl_waddr(dl_waddr), .dl_wdata(dl_wdata), .tx_we(tx_we), .tx_waddr(tx_waddr),
         .tx_wdata(tx_wdata), .vga_r(r), .vga_g(g), .vga_b(b), .vga_hs(vhs), .vga_vs(vvs), .overflow(ovf));
 
@@ -125,7 +157,7 @@ module tb_frame;
                 wait (pix_ce && hcount == 0 && vcount == 0); @(negedge clk); capturing = 1;
                 @(posedge frame_end); @(negedge clk); capturing = 0;
                 dump_ppm(i);
-                $display("tb_frame: tick %0d captured (dl_full=%0d overflow=%0d)", i, dl_full, ovf);
+                $display("tb_frame: tick %0d captured (dl_full=%0d overflow=%0d missing=%0d pic_loads=%0d bad_req=%0d)", i, dl_full, ovf, missing, n_load, bad_req);
                 si = si + 1;
             end
         end

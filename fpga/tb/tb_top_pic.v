@@ -83,6 +83,12 @@ module tb_top_pic;
             $display("FAIL Stage 1 not entered after the tap (s1_enter %0d, screen %0d, mode %0d)",
                      n_s1, dut.u_sm.screen, dut.bg_mode);
         end
+        // Stage 1 room streamed from the flash: loaded in the same vblank as the entry, size 640x358
+        if (n_load != 2 || dut.u_sm.pic_id != PIC_S1_ROOM || dut.pic_h != 10'd358) begin
+            errors = errors + 1;
+            $display("FAIL Stage 1 entry did not load PIC_S1_ROOM (pic_loads %0d, pic_id %0d, h %0d)",
+                     n_load, dut.u_sm.pic_id, dut.pic_h);
+        end
         $display("TB_TOP_PIC: %0s (errors=%0d, pic_loads %0d, s1_enter %0d)", errors == 0 ? "PASS" : "FAIL",
                  errors, n_load, n_s1);
         $finish;

@@ -5,6 +5,8 @@
 //   python3 -I tools/frame_check.py picgen      -> sim/pic_dl.mem, sim/pic_tx.mem, sim/pic_scenes.txt
 //   vvp tb_frame_pic.vvp +NAME=pic_title +PICID=2 +PICW=640 +PICH=360 +FADE=16 +BGC=291 [+ZERO]
 //        -> sim/frames/<NAME>.ppm       (+ZERO = erased flash: pic_stream `missing` stripes)
+//   room scenes (bg_mode 1 / 2): +MODE=1|2 +CAMX +CAMY +ZOX +ZOY +ZINV, and +CAMX2 .. +ZINV2 = values written at
+//   VGA line 200 of the captured frame (the renderer must keep the values latched for the frame)
 // Sequence: reset, magic check, display list + text RAM written through the renderer's write ports,
 // pic_load in vblank (frame_end), then the NEXT complete frame is captured.
 `timescale 1ns/1ps
@@ -15,7 +17,10 @@ module tb_frame_pic;
     always #5 clk = ~clk;
 
     // scene parameters (plusargs)
-    integer     a_id, a_w, a_h, a_fade, a_bgc;
+    integer     a_id, a_w, a_h, a_fade, a_bgc, a_mode;
+    integer     a_cx, a_cy, a_ox, a_oy, a_zi, a_cx2, a_cy2, a_ox2, a_oy2, a_zi2;
+    reg  [10:0] cam_x = 11'd0;  reg [9:0] cam_y = 10'd0;
+    reg  [11:0] zoom_ox = 12'd0, zoom_oy = 12'd0; reg [16:0] zoom_inv = 17'd65536;
     reg  [4:0]  pic_id = 5'd0;
     reg  [9:0]  pic_w = 10'd640, pic_h = 10'd360;
     reg  [4:0]  fade = 5'd16;
@@ -52,8 +57,8 @@ module tb_frame_pic;
     reg  [11:0] tx_waddr = 12'd0; reg [6:0]  tx_wdata = 7'd0;
     wire [3:0]  r, g, b; wire vhs, vvs, ovf;
     line_renderer lr (.clk(clk), .rst(rst), .pix_ce(pix_ce), .hcount(hcount), .vcount(vcount), .active(active),
-        .hsync(hs), .vsync(vs), .bg_mode(bg_mode), .bg_color(bg_color), .bg_color2(12'h000), .cam_x(11'd0),
-        .cam_y(10'd0), .zoom_ox(12'd0), .zoom_oy(12'd0), .zoom_inv(17'd65536), .wire_src(270'd0), .src_val(28'd0),
+        .hsync(hs), .vsync(vs), .bg_mode(bg_mode), .bg_color(bg_color), .bg_color2(12'h000), .cam_x(cam_x),
+        .cam_y(cam_y), .zoom_ox(zoom_ox), .zoom_oy(zoom_oy), .zoom_inv(zoom_inv), .wire_src(270'd0), .src_val(28'd0),
         .wire_hl(7'd0), .hill_ph(16'd0), .wave_ph(8'd0), .s3_cam(13'd0),
         .pic_rgb(rd_rgb), .pic_w(pic_w), .pic_h(pic_h), .fade(fade),
         .pic_row_req(row_req), .pic_src_row(src_row), .pic_rd_x(rd_x),
@@ -91,12 +96,24 @@ module tb_frame_pic;
         if (!$value$plusargs("PICH=%d", a_h)) a_h = 360;
         if (!$value$plusargs("FADE=%d", a_fade)) a_fade = 16;
         if (!$value$plusargs("BGC=%d", a_bgc)) a_bgc = 0;
+        if (!$value$plusargs("MODE=%d", a_mode)) a_mode = 5;
+        if (!$value$plusargs("CAMX=%d", a_cx)) a_cx = 0;
+        if (!$value$plusargs("CAMY=%d", a_cy)) a_cy = 0;
+        if (!$value$plusargs("ZOX=%d", a_ox)) a_ox = 0;
+        if (!$value$plusargs("ZOY=%d", a_oy)) a_oy = 0;
+        if (!$value$plusargs("ZINV=%d", a_zi)) a_zi = 65536;
+        if (!$value$plusargs("CAMX2=%d", a_cx2)) a_cx2 = a_cx;
+        if (!$value$plusargs("CAMY2=%d", a_cy2)) a_cy2 = a_cy;
+        if (!$value$plusargs("ZOX2=%d", a_ox2)) a_ox2 = a_ox;
+        if (!$value$plusargs("ZOY2=%d", a_oy2)) a_oy2 = a_oy;
+        if (!$value$plusargs("ZINV2=%d", a_zi2)) a_zi2 = a_zi;
         for (i = 0; i < 256; i = i + 1) dlm[i] = 64'd0;
         for (i = 0; i < 4096; i = i + 1) txm[i] = 8'd32;
         $readmemh("sim/pic_dl.mem", dlm);
         $readmemh("sim/pic_tx.mem", txm);
         ndl = 0; while (ndl < 255 && dlm[ndl][63:61] != 3'd0) ndl = ndl + 1;
-        pic_id = a_id; pic_w = a_w; pic_h = a_h; fade = a_fade; bg_color = a_bgc; bg_mode = 3'd5;
+        pic_id = a_id; pic_w = a_w; pic_h = a_h; fade = a_fade; bg_color = a_bgc; bg_mode = a_mode;
+        cam_x = a_cx; cam_y = a_cy; zoom_ox = a_ox; zoom_oy = a_oy; zoom_inv = a_zi;
 
         repeat (5) @(posedge clk);
         @(negedge clk); rst = 1'b0;
@@ -115,6 +132,8 @@ module tb_frame_pic;
         wait (pix_ce && hcount == 0 && vcount == 0); @(negedge clk);
         if (ps_busy) $display("tb_frame_pic: WARNING pic_load still busy at the start of the frame");
         capturing = 1'b1; counting = 1'b1;
+        wait (vcount == 10'd200); @(negedge clk);          // camera / zoom change in the middle of the frame
+        cam_x = a_cx2; cam_y = a_cy2; zoom_ox = a_ox2; zoom_oy = a_oy2; zoom_inv = a_zi2;
         @(posedge frame_end); @(negedge clk); capturing = 1'b0; counting = 1'b0;
         $sformat(fname, "sim/frames/%0s.ppm", name);
         fd = $fopen(fname, "w");

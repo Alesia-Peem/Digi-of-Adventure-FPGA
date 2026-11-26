@@ -8,7 +8,8 @@
   python3 fpga/tools/frame_check.py cmp                -> renders the same fields with ui_compile's model,
                                                           compares pixel by pixel, writes sim/frames/cmp_<tick>.png
                                                           (left: RTL VGA output, right: model, red = different)
-  python3 fpga/tools/frame_check.py picgen             -> bg_mode 5 picture scenes for tb/tb_frame_pic.v
+  python3 fpga/tools/frame_check.py picgen             -> bg_mode 5 picture scenes and bg_mode 1/2 room scenes
+                                                          (camera, zoom, clamps, missing flash) for tb/tb_frame_pic.v
   python3 fpga/tools/frame_check.py piccmp [scene..]   -> compares sim/frames/<scene>.ppm with the model
 """
 import glob
@@ -162,6 +163,17 @@ PIC_SCENES = {
     "pic_room_f5": ("S1_ROOM", 0, 640, 358, 5, 0x0F7, True),    # rows 358-359: bg_color (faded too)
     "pic_missing": ("TITLE", 2, 640, 360, 16, 0x123, False),     # flash erased: pic_stream stripes
 }
+# Stage rooms streamed from the flash (bg_mode 1 = Stage 1 camera / 2x upscale, bg_mode 2 = Stage 2 1:1 or zoom),
+# same display list on top, fade 16. `chg` = camera / zoom written by the testbench at VGA line 200 of the
+# captured frame: the renderer latches them once per frame (vblank), so the model ignores `chg`.
+#   name: (picture, pic id, bg_mode, (cam_x, cam_y), (zoom_ox, zoom_oy, zoom_inv), chg or None, flash programmed?)
+ROOM_SCENES = {
+    "room1_max":   ("S1_ROOM", 0, 1, (640, 354), (0, 0, 65536), None, True),            # largest camera
+    "room1_odd":   ("S1_ROOM", 0, 1, (333, 77), (0, 0, 65536), ((100, 10), (0, 0, 65536)), True),
+    "room1_miss":  ("S1_ROOM", 0, 1, (333, 77), (0, 0, 65536), None, False),            # stripes show through
+    "room2_zoom":  ("S2_ROOM", 1, 2, (0, 0), (37, 21, 47000), None, True),               # fractional zoom
+    "room2_clamp": ("S2_ROOM", 1, 2, (0, 0), (400, 300, 32768), ((0, 0), (0, 0, 65536)), True),   # sx/sy clamps
+}
 PIC_TEXT = "CPE ESCAPE"
 
 
@@ -210,11 +222,40 @@ def picgen():
         for name, (_, pid, w, h, fade, bgc, prog) in PIC_SCENES.items():
             f.write("%s +NAME=%s +PICID=%d +PICW=%d +PICH=%d +FADE=%d +BGC=%d%s\n"
                     % (name, name, pid, w, h, fade, bgc, "" if prog else " +ZERO"))
-    print("picgen: %d scenes, %d primitives" % (len(PIC_SCENES), len(dl) - 1))
+        for name, (_, pid, mode, cam, zoom, chg, prog) in ROOM_SCENES.items():
+            cam2, zoom2 = chg if chg else (cam, zoom)
+            f.write("%s +NAME=%s +PICID=%d +PICW=640 +PICH=358 +FADE=16 +BGC=291 +MODE=%d +CAMX=%d +CAMY=%d "
+                    "+ZOX=%d +ZOY=%d +ZINV=%d +CAMX2=%d +CAMY2=%d +ZOX2=%d +ZOY2=%d +ZINV2=%d%s\n"
+                    % ((name, name, pid, mode) + cam + zoom + cam2 + zoom2 + ("" if prog else " +ZERO",)))
+    print("picgen: %d scenes, %d primitives" % (len(PIC_SCENES) + len(ROOM_SCENES), len(dl) - 1))
+
+
+def room_model(name):
+    """640x480 RGB model frame of a room scene (bg_mode 1 / 2): ui_compile.render with the room colours of
+    mem/preview/pic_<room>.png (ui_compile.Assets) and the frame's camera / zoom (the values before `chg`)"""
+    _, _, mode, cam, zoom, _, prog = ROOM_SCENES[name]
+    assets = ui_compile.Assets()
+    dl, tx = pic_list()
+    if prog:
+        return ui_compile.render(dl, tx, assets, mode, 0x123, cam=cam, zoom=zoom)
+    # flash missing: pic_stream stripes, shown row = requested source row sy, column = rd_x = sx
+    bgrow = np.zeros((360, 640), dtype=np.int32)
+    for y in range(360):
+        for x in range(640):
+            if mode == 1:
+                sy, sx = (cam[1] + y) >> 1, (cam[0] + x) >> 1
+            else:
+                sy = min(zoom[1] + ((y * zoom[2]) >> 16), 357)
+                sx = min(zoom[0] + ((x * zoom[2]) >> 16), 639)
+            bgrow[y, x] = 0xF0F if ((sx + sy) >> 4) & 1 else 0x000
+    assets.board = (bgrow, list(range(4096)))
+    return ui_compile.render(dl, tx, assets, 4, 0x123)
 
 
 def pic_model(name):
     """640x480 RGB model frame of a picture scene (bg_mode 5)"""
+    if name in ROOM_SCENES:
+        return room_model(name)
     pic, _, w, h, fade, bgc, prog = PIC_SCENES[name]
     if prog:
         a = np.array(Image.open(os.path.join(FPGA, "mem", "preview", "pic_%s.png" % pic)).convert("RGB"),
@@ -270,7 +311,7 @@ if __name__ == "__main__":
     if sys.argv[1] == "picgen":
         picgen()
     elif sys.argv[1] == "piccmp":
-        sys.exit(0 if piccmp(sys.argv[2:] or list(PIC_SCENES)) else 1)
+        sys.exit(0 if piccmp(sys.argv[2:] or list(PIC_SCENES) + list(ROOM_SCENES)) else 1)
     elif sys.argv[1] == "pick":
         pick(*(sys.argv[2:3] or ["full"]))
     elif sys.argv[1] == "pick2":

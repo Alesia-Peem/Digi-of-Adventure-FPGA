@@ -2,6 +2,7 @@
 # run_tests.sh - full regression (Icarus Verilog + Python 3 with pygame, Pillow, numpy).
 #   cd fpga && ./run_tests.sh          # everything
 #   ./run_tests.sh quick               # skip the (slow) VGA frame capture
+#   ./run_tests.sh frames12            # sections 1-3, then only the Stage 1 / Stage 2 VGA frame comparisons
 set -e
 cd "$(dirname "$0")"
 ROOT=$(cd .. && pwd)
@@ -51,6 +52,31 @@ with_timeout() {           # with_timeout SECONDS cmd...  (macOS has no GNU time
   return $rc
 }
 S2_GEN_TIMEOUT=${S2_GEN_TIMEOUT:-120}   # the Stage 2 trace generator currently waits forever
+
+# Stage 1 / Stage 2 frames: the stimulus is generated from demo_py_old (the OLD game the current s1_core /
+# s2_core were ported from) - the new game's scenarios do not exist yet (Phase 2/3). Rooms come from the flash
+# model (real pic_stream chain), so mem/pictures.hex is needed.
+frames12() {
+  [ -f mem/pictures.hex ] || python3 -I tools/pic_pack.py
+  (cd "$ROOT" && COSIM_DEMO=demo_py_old python3 -I fpga/tools/cosim_s1.py gen full 2>/dev/null | grep "^scenario")
+  python3 -I tools/frame_check.py pick full
+  $IVS -o sim/build/tb_frame.vvp rtl/common/*.v rtl/stage1/*.v rtl/video/*.v rtl/ui/ui_composer.v tb/flash_model.v \
+    tb/tb_frame.v
+  vvp -n sim/build/tb_frame.vvp +STIM=sim/s1_full_stim.mem +SNAP=sim/frame_ticks.txt +OUTDIR=sim/frames | grep captured
+  python3 -I tools/frame_check.py cmp
+  (cd "$ROOT" && COSIM_DEMO=demo_py_old with_timeout "$S2_GEN_TIMEOUT" python3 -I fpga/tools/cosim_s2.py gen full \
+    2>/dev/null | grep "^scenario")
+  python3 -I tools/frame_check.py pick2
+  $IVS -o sim/build/tb_frame2.vvp rtl/common/*.v rtl/stage2/*.v rtl/video/*.v rtl/ui/ui_composer.v tb/flash_model.v \
+    tb/tb_frame2.v
+  vvp -n sim/build/tb_frame2.vvp +STIM=sim/s2_full_stim.mem +SNAP=sim/frame_ticks2.txt +OUTDIR=sim/frames | grep captured
+  python3 -I tools/frame_check.py cmp frame_ticks2.txt
+}
+if [ "$1" = "frames12" ]; then      # only the Stage 1 / Stage 2 frame comparisons
+  echo "== 12. VGA frames, Stage 1 + Stage 2 only"
+  frames12
+  exit 0
+fi
 
 section4() {
   (cd "$ROOT" && python3 -I fpga/tools/cosim_s1.py gen > /dev/null 2>&1)
@@ -137,14 +163,7 @@ PY
 
 if [ "$1" != "quick" ]; then
   echo "== 12. VGA frames: RTL video pipeline vs Python model (pixel exact) - takes a long time"
-  python3 -I tools/frame_check.py pick full
-  $IVS -o sim/build/tb_frame.vvp rtl/common/*.v rtl/stage1/*.v rtl/video/*.v rtl/ui/ui_composer.v tb/tb_frame.v
-  vvp -n sim/build/tb_frame.vvp +STIM=sim/s1_full_stim.mem +SNAP=sim/frame_ticks.txt +OUTDIR=sim/frames | grep captured
-  python3 -I tools/frame_check.py cmp
-  python3 -I tools/frame_check.py pick2
-  $IVS -o sim/build/tb_frame2.vvp rtl/common/*.v rtl/stage2/*.v rtl/video/*.v rtl/ui/ui_composer.v tb/tb_frame2.v
-  vvp -n sim/build/tb_frame2.vvp +STIM=sim/s2_full_stim.mem +SNAP=sim/frame_ticks2.txt +OUTDIR=sim/frames | grep captured
-  python3 -I tools/frame_check.py cmp frame_ticks2.txt
+  frames12
   $IVS -o sim/build/tb_frame3.vvp rtl/common/*.v rtl/stage3/*.v rtl/video/*.v rtl/ui/ui_composer.v tb/tb_frame3.v
   printf "0\n2\n5A\nDD\n209\n375\n" > sim/frame_ticks3_careless.txt
   vvp -n sim/build/tb_frame3.vvp +STIM=sim/s3_careless_stim.mem +SNAP=sim/frame_ticks3_careless.txt \

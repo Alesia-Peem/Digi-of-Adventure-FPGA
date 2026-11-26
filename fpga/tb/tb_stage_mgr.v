@@ -2,7 +2,8 @@
 //   OPEN -> S1 -> C12 -> S2 -> C23 -> S3 -> END -> OPEN   (twice around the loop)
 // Checked on every clock (monitor) :
 //   * the screen changes, bg_mode 5 is entered / left (pic_on) and pic_load pulses ONLY in the cycle after a
-//     vblank pulse (R13), and every entry into a picture screen comes with a pic_load (same vblank)
+//     vblank pulse (R13), and every entry into a picture screen or into Stage 1 / 2 (rooms from the flash)
+//     comes with a pic_load (same vblank); Stage 3 never loads a picture
 //   * s1/s2/s3_enter pulse only on that cycle, only for the screen that was entered
 //   * form never decreases
 // Checked by the scenario :
@@ -52,6 +53,7 @@ module tb_stage_mgr;
     end endtask
 
     // ---------------------------------------------------------------- stimulus timing + monitor (negedge)
+    // (pic_load also on S1 / S2 entry since the rooms moved to the flash - Task 7)
     integer cyc = 0;
     reg     tap_req = 1'b0;           // deliver one ev_tap with the next game tick
     reg     vb_prev = 1'b0;           // vblank as sampled by the last posedge
@@ -63,7 +65,13 @@ module tb_stage_mgr;
             if (screen != scr_prev && !vb_prev) fail("screen changed outside vblank");
             if (pic_on != pic_prev && !vb_prev) fail("bg_mode 5 entered/left outside vblank");
             if (pic_load && !vb_prev)           fail("pic_load outside vblank");
-            if (pic_load && !pic_on)            fail("pic_load on a non-picture screen");
+            if (pic_load && !(pic_on || on1 || on2)) fail("pic_load on Stage 3 / boot (no picture there)");
+            // Stage 1 / Stage 2 rooms are streamed from the flash (bg_mode 1 / 2): every entry (normal, demo jump,
+            // demo restart) loads the room in the same vblank; Stage 3 loads nothing
+            if (s1_enter && !(pic_load && pic_id == PIC_S1_ROOM)) fail("S1 entered without pic_load(PIC_S1_ROOM)");
+            if (s2_enter && !(pic_load && pic_id == PIC_S2_ROOM)) fail("S2 entered without pic_load(PIC_S2_ROOM)");
+            if (s3_enter && pic_load)          fail("pic_load when entering S3");
+            if (pic_load && !(s1_enter || s2_enter || (pic_on && vb_prev))) fail("pic_load without a screen entry");
             if (pic_on && screen != scr_prev && !pic_load) fail("picture screen entered without pic_load");
             if (s1_enter && !(vb_prev && screen == S1)) fail("bad s1_enter");
             if (s2_enter && !(vb_prev && screen == S2)) fail("bad s2_enter");
