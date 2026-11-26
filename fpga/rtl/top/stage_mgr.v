@@ -11,13 +11,18 @@
 //     screen, pic_load + pic_id -> entering / leaving bg_mode 5 and loading the picture happen together in
 //     vblank (ruling R13); pic_stream loads header + palette (~2.3k clk) long before the first row request.
 //   * One request at a time: while a change is pending, further requests are ignored (no skipped screens).
-//   * BTNC on a picture screen: the input_hub tap (= release of a short press) acts once. A press that is
-//     held across a transition (or released so shortly before it that its tap is still on its way through
-//     input_hub) sets `held` when the screen is entered; its tap is swallowed (or, for a long press, `held`
-//     is dropped once BTNC is stably released at a game tick with no tap) -> the NEXT tap acts.
-//     "stably released" = low for >= 8 clk: button_unit raises tap 2 clk after the level falls and
-//     input_hub hands it out with the first gtick >= 3 clk after the fall, so a tick that sees BTNC low for
-//     8 clk without ev_tap proves that no tap is pending.
+//   * BTNC on a picture screen: the input_hub tap (= release of a short press) acts once. A tap can still be
+//     on its way when a screen is entered: input_hub keeps it pending until the NEXT game tick (up to
+//     16.7 ms after the release). So `held` is set on entering a screen when BTNC is pressed, or was
+//     released and no game tick has handed out that release's tap yet (`fell` = "BTNC fell since the last
+//     tick that is known to carry its tap"); the next tap is then swallowed (for a long press, which gives
+//     no tap, `held` is dropped at the first tick that sees BTNC stably released) -> the NEXT tap acts.
+//     Covers: press held across a transition, and a double tap whose 2nd release falls between the
+//     requesting tick and the vblank (its tap arrives on the new screen).
+//     "stably released" = low for >= 8 clk (`low8`): button_unit raises tap 2 clk after the level falls and
+//     input_hub hands it out with the first gtick >= 3 clk after the fall, so a gtick with low8 carries the
+//     tap of that release (if there is one) -> it clears `fell`; a fall in the same cycle as a gtick keeps
+//     `fell` set (set wins, low8 is 0 then anyway).
 //   * Demo menu (demo_menu.v, SW12): 13 = go to Stage 1, 14 = go to Stage 2 (SW0 off) / Stage 3 (SW0 on).
 //     A jump goes straight to the stage (no cutscene), from ANY screen, without help screen, Stage 2 with an
 //     empty handoff - the same as the previous 2-bit manager. Other commands belong to the running stage
@@ -91,13 +96,13 @@ module stage_mgr (
         max2 = (a > b) ? a : b;
     endfunction
 
-    reg       pend, pdemo, held;
+    reg       pend, pdemo, held, fell;
     reg [6:0] lo_sr;                                 // BTNC low history (1 = low), newest in [0]
     wire      low8 = &{lo_sr, !btnc_lvl};
     reg [2:0] nxt;
     always @(posedge clk) begin
         if (rst) begin
-            screen <= SC_BOOT; pend <= 1'b1; nxt <= SC_OPEN; pdemo <= 1'b0; held <= 1'b1; lo_sr <= 7'd0;
+            screen <= SC_BOOT; pend <= 1'b1; nxt <= SC_OPEN; pdemo <= 1'b0; held <= 1'b1; lo_sr <= 7'h7F; fell <= 1'b0;
             s1_enter <= 1'b0; s2_enter <= 1'b0; s3_enter <= 1'b0; s1_help <= 1'b1; s2_help <= 1'b1;
             h2_armor <= 2'd0; h2_shard <= 1'b0; h2_boost <= 1'b0;
             h3_armor <= 2'd0; h3_shard <= 1'b0; h3_boost <= 1'b0;
@@ -105,6 +110,8 @@ module stage_mgr (
         end else begin
             s1_enter <= 1'b0; s2_enter <= 1'b0; s3_enter <= 1'b0; pic_load <= 1'b0;
             lo_sr <= {lo_sr[5:0], !btnc_lvl};
+            if (gtick && low8) fell <= 1'b0;            // this tick carries the last release's tap, if any
+            if (!lo_sr[0] && !btnc_lvl) fell <= 1'b1;   // BTNC falls now (set wins)
             if (gtick && (ev_tap || low8)) held <= 1'b0;   // the held press's tap swallowed / BTNC released
             // ---- requests
             if (!pend) begin
@@ -127,7 +134,7 @@ module stage_mgr (
             end
             // ---- apply in vblank
             if (pend && vblank) begin
-                pend <= 1'b0; screen <= nxt; held <= !low8;
+                pend <= 1'b0; screen <= nxt; held <= !low8 || fell;
                 case (nxt)
                     SC_S1: begin s1_enter <= 1'b1; s1_help <= !pdemo; end
                     SC_S2: begin

@@ -84,7 +84,8 @@ done
 
 echo "== 7. full design elaborates (top level)"
 $IVS -o sim/build/top.vvp rtl/common/*.v rtl/video/*.v rtl/ui/*.v rtl/stage1/*.v rtl/stage2/*.v rtl/stage3/*.v \
-  rtl/top/*.v && echo "top: elaborated"
+  rtl/top/*.v
+echo "top: elaborated"     # separate line: a failing compile stops the run (set -e)
 
 echo "== 8. QSPI picture streamer: pic_stream + qspi_reader vs the S25FL128S model (pixel exact vs previews)"
 [ -f mem/pictures.hex ] || python3 -I tools/pic_pack.py
