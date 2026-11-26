@@ -149,8 +149,127 @@ def cmp():
     return ok_all
 
 
+# ====================================================================== bg_mode 5: streamed picture
+# Scenes for tb_frame_pic.v (real pic_stream + qspi_reader + flash_model + mem/pictures.hex -> line_renderer).
+# Display list on top of the picture: a half-transparent panel, a scale-2 text and an opaque square, so the
+# composition order (faded background first, then the list, list NOT faded) is checked pixel exactly.
+#   name: (picture, pic id (pic_map.vh), w, h, fade, bg_color, flash programmed?)
+PIC_SCENES = {
+    "pic_title":   ("TITLE", 2, 640, 360, 16, 0x123, True),
+    "pic_fade8":   ("TITLE", 2, 640, 360, 8, 0x123, True),
+    "pic_room_f5": ("S1_ROOM", 0, 640, 358, 5, 0x0F7, True),    # rows 358-359: bg_color (faded too)
+    "pic_missing": ("TITLE", 2, 640, 360, 16, 0x123, False),     # flash erased: pic_stream stripes
+}
+PIC_TEXT = "CPE ESCAPE"
+
+
+def pic_list():
+    """display list (ui_compile.render tuples) + text RAM used by every picture scene"""
+    tx = [32] * 4096
+    for i, ch in enumerate(PIC_TEXT):
+        tx[i] = ord(ch)
+    dl = [("RECT", 40, 250, 600, 330, 0x000, 8),                 # 50 % black panel
+          ("TEXT", 60, 274, 0xFF0, 1, 0, len(PIC_TEXT), 0),      # scale-2 text, opaque
+          ("RECT", 600, 10, 630, 40, 0xF00, 16),                 # opaque red square
+          ("END",)]
+    return dl, tx
+
+
+def pic_encode(e):
+    """64-bit display-list word (line_renderer.v header)"""
+    if e[0] == "RECT":
+        _, x0, y0, x1, y1, c, a = e
+        return (1 << 61) | ((x0 & 0x7FF) << 50) | ((y0 & 0x3FF) << 40) | ((x1 & 0x7FF) << 29) | \
+            ((y1 & 0x3FF) << 19) | (c << 7) | (a << 2)
+    if e[0] == "TEXT":
+        _, x0, y0, c, sc2, start, n, sml = e
+        return (4 << 61) | ((x0 & 0x7FF) << 50) | ((y0 & 0x3FF) << 40) | (c << 28) | (sc2 << 27) | \
+            (start << 15) | (n << 8) | (sml << 7)
+    return 0
+
+
+def fade12(c, fade):
+    """R8 fade rule (line_renderer.v fade4): every 4-bit channel c -> floor(c * fade / 16), fade 0..16
+    (values above 16 count as 16)"""
+    f = min(fade, 16)
+    return (((c >> 8 & 15) * f >> 4) << 8) | (((c >> 4 & 15) * f >> 4) << 4) | ((c & 15) * f >> 4)
+
+
+def picgen():
+    """writes sim/pic_dl.mem, sim/pic_tx.mem and sim/pic_scenes.txt (one line per scene: plusargs)"""
+    dl, tx = pic_list()
+    with open(os.path.join(SIM, "pic_dl.mem"), "w") as f:
+        for e in dl:
+            f.write("%016X\n" % pic_encode(e))
+    with open(os.path.join(SIM, "pic_tx.mem"), "w") as f:
+        for v in tx:
+            f.write("%02X\n" % v)
+    with open(os.path.join(SIM, "pic_scenes.txt"), "w") as f:
+        for name, (_, pid, w, h, fade, bgc, prog) in PIC_SCENES.items():
+            f.write("%s +NAME=%s +PICID=%d +PICW=%d +PICH=%d +FADE=%d +BGC=%d%s\n"
+                    % (name, name, pid, w, h, fade, bgc, "" if prog else " +ZERO"))
+    print("picgen: %d scenes, %d primitives" % (len(PIC_SCENES), len(dl) - 1))
+
+
+def pic_model(name):
+    """640x480 RGB model frame of a picture scene (bg_mode 5)"""
+    pic, _, w, h, fade, bgc, prog = PIC_SCENES[name]
+    if prog:
+        a = np.array(Image.open(os.path.join(FPGA, "mem", "preview", "pic_%s.png" % pic)).convert("RGB"),
+                     dtype=np.int32)
+        assert a.shape[1] == w and a.shape[0] == h, (name, a.shape)
+        assert not np.any(a % 17), "preview is not 4:4:4"
+        a //= 17
+        src = lambda y, x: (a[y, x, 0] << 8) | (a[y, x, 1] << 4) | a[y, x, 2]   # noqa: E731
+    else:
+        # pic_stream.v stripes while `missing`: row shown on game line y = src_row y (clamped to h-1)
+        src = lambda y, x: 0xF0F if ((x + min(y, h - 1)) >> 4) & 1 else 0x000   # noqa: E731
+    bgrow = np.zeros((360, 640), dtype=np.int32)
+    pal = []
+    for y in range(360):
+        for x in range(640):
+            c = src(y, x) if (y < h and x < w) else bgc       # R9: outside w x h -> bg_color
+            bgrow[y, x] = len(pal)
+            pal.append(fade12(int(c), fade))                  # R8: fade the background only
+    # The renderer model composes the display list over a per-pixel background array in bg_mode 4
+    # (Stage-2 board path); feeding it the faded picture gives exactly line_renderer's bg_mode 5.
+    assets = ui_compile.Assets()
+    assets.board = (bgrow, pal)
+    dl, tx = pic_list()
+    return ui_compile.render(dl, tx, assets, 4, bgc)
+
+
+def piccmp(names):
+    ok_all = True
+    for name in names:
+        p = os.path.join(FR, "%s.ppm" % name)
+        if not os.path.isfile(p):
+            print("%-12s: not captured" % name)
+            ok_all = False
+            continue
+        rtl = read_ppm(p)
+        model = pic_model(name)
+        diff = np.any(model != rtl, axis=2)
+        n = int(diff.sum())
+        ok_all &= (n == 0)
+        mark = rtl.copy()
+        mark[diff] = (255, 0, 0)
+        Image.fromarray(np.concatenate([rtl, model, mark], axis=1)).save(os.path.join(FR, "cmp_%s.png" % name))
+        if n:
+            ys, xs = np.nonzero(diff)
+            print("  first diff at vga (%d,%d): rtl %s model %s" % (xs[0], ys[0], rtl[ys[0], xs[0]] // 17,
+                                                                   model[ys[0], xs[0]] // 17))
+        print("%-12s: %6d differing pixels %s" % (name, n, "OK" if n == 0 else "DIFF"))
+    print("PIC FRAME CHECK: %s" % ("PASS" if ok_all else "FAIL"))
+    return ok_all
+
+
 if __name__ == "__main__":
-    if sys.argv[1] == "pick":
+    if sys.argv[1] == "picgen":
+        picgen()
+    elif sys.argv[1] == "piccmp":
+        sys.exit(0 if piccmp(sys.argv[2:] or list(PIC_SCENES)) else 1)
+    elif sys.argv[1] == "pick":
         pick(*(sys.argv[2:3] or ["full"]))
     elif sys.argv[1] == "pick2":
         pick2()

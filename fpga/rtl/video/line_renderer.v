@@ -80,6 +80,14 @@ module line_renderer #(
     input  wire [15:0] hill_ph,     // hills phase (sine-table units x 256)
     input  wire [7:0]  wave_ph,     // water surface phase
     input  wire [12:0] s3_cam,      // camera, world px (32 px per metre)
+    // bg_mode 5: full-screen picture streamed from the QSPI flash (pic_stream.v)
+    input  wire [11:0] pic_rgb,     // pic_stream rd_rgb (2 clk after pic_rd_x)
+    input  wire [9:0]  pic_w,       // picture size; outside w x h the background is bg_color
+    input  wire [9:0]  pic_h,
+    input  wire [4:0]  fade,        // 0..16: background colour * fade / 16 (16 = full brightness)
+    output reg         pic_row_req, // -> pic_stream row_req (one per game line)
+    output reg  [9:0]  pic_src_row, // -> pic_stream src_row
+    output wire [9:0]  pic_rd_x,    // -> pic_stream rd_x
     // display list + text RAM write ports (from ui_composer)
     input  wire        dl_we,
     input  wire [7:0]  dl_waddr,
@@ -653,6 +661,10 @@ module line_renderer #(
     reg  [5:0]  bidx_r;  wire [11:0] pc4;
     always @(posedge clk) if (pix_ce) bidx_r <= bidx;
     rom_sync #(.WIDTH(12), .DEPTH(64), .AW(6), .MEM_FILE(BP_FILE)) u_bpal (.clk(clk), .addr(bidx_r), .q(pc4));
+
+    // TODO bg_mode 5 (stub)
+    assign pic_rd_x = 10'd0;
+    always @(posedge clk) begin pic_row_req <= 1'b0; pic_src_row <= 10'd0; end
 
     reg sbank_d;
     reg [16:0] ent;
