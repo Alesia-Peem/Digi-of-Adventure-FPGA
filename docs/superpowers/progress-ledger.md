@@ -72,3 +72,10 @@ Ruling R16 (user request, supersedes R15): model per task by difficulty —
 Applied: T6 review = opus (top integration, qspi_io primitives); T7 impl+review = opus (renderer bg path, frame-exact); T8 impl = haiku, review = sonnet; fix rounds start one tier at the implementer's tier.
 Ruling R17 (user message 2026-11-26): (1) keep flash plan (-84 RAMB36, no quality loss); 4 bpp rooms (-28) stays a documented fallback if Vivado/board shows flash streaming fails. (2) Vivado run is a USER action on their Windows/Linux PC after Task 7+8 (script + .mcs ready); never claim results before it. (3) Task 8 also adds an honest "Phase 0 status" section to fpga/docs/STATUS.md: works+simulated / not done (S1,S2 follow old game; S3 old design; title/cutscenes/endings placeholder pictures) / not verified (synthesis, timing, board).
 Task 6: implemented (0798845..1e25d34) DONE; review pending. Full non-quick run not done. STARTUPE2/IOBUF need Vivado+board.
+Task 6: review 1 — spec ✅, approved with 1 Important: tap released just before vblank switch can skip next screen (stage_mgr held <= !low8). Fix round 1 dispatched (BASE 84f8b1b), incl. run_tests "&& echo" elaboration minor.
+Task 6: minor (deferred): demo cmd / s1,s2 exit pulse arriving while change pending is dropped
+Task 6: minor (deferred): tb_stage_mgr GT_PER<<VB_PER unrealistic (addressed partly by new case); xsim sim_1 globs tb_top_pic without SIMULATION
+Task 6: fix round 1/5 re-review: 2 addressed, 0 open (17861c1..54b526a)
+Task 6: complete (commits 0798845..54b526a, review clean after 1 fix round)
+Task 7: dispatched (BASE 54b526a, opus)
+Snapshot pushed on user request; Task 7 commits (4773d6d, 028f543) pushed UNREVIEWED.
