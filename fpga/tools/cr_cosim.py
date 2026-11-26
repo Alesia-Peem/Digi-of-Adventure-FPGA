@@ -479,6 +479,161 @@ SCEN = {"plan1": _plan(1), "plan2": _plan(2), "plan3": _plan(3), "careless": _ca
         "buttons": _buttons}
 
 
+class PhysRun:
+    """model only, with no animals and no lifts: the stimulus for the player/collision hardware (Task 7).
+    The model was checked against game.py on these situations by cr_test_model.py."""
+
+    def __init__(self):
+        self.m = model(1, physics_only=True)
+        self.words, self.trace = [], []
+
+    def command(self, op, arg=0):
+        self.words.append(CMD | op << 12 | arg << 16)
+        if op == OP_STAGE:
+            self.m.stage = arg
+            self.m.restart()
+        elif op == OP_PUT:
+            self.m.teleport((arg & 511) * M.Q // 2, (arg >> 9 & 31) * M.Q // 2, bool(arg >> 14 & 1))
+
+    def put(self, x, y, grounded=True):
+        assert x * 2 == int(x * 2) and y * 2 == int(y * 2) and 0 <= x < 256 and 0 <= y < 16
+        self.command(OP_PUT, int(x * 2) | int(y * 2) << 9 | grounded << 14)
+
+    def step(self, axis=0, jump=False):
+        self.words.append((axis < 0) | (axis > 0) << 1 | bool(jump) << 2)
+        self.m.step(axis, jump)
+        self.trace.append(self.m.snapshot())
+
+
+def _phys():
+    import cr_test_model as T                          # terrain finders (imports this module back)
+    r = PhysRun()
+
+    def at(stage, x, y, grounded=True):
+        r.command(OP_STAGE, stage)
+        r.put(x, y, grounded)
+
+    def press(n, *times, axis=1):
+        for t in range(n):
+            r.step(axis, t in times)
+
+    col = T.find(1, T.flat(12))
+    h = T.surface(1, col)
+    for k in range(1, 141):                            # double jump pressed on every step of the first jump
+        for axis in ((0, 1) if k % 5 == 0 else (1,)):
+            at(1, col + .5, h)
+            press(220, 5, 5 + k, axis=axis)
+    for k in range(60, 101):                           # early press before landing (buffer)
+        at(1, col + .5, h)
+        press(200, 5, k, axis=0)
+    for k in range(100, 181, 2):                       # early press after a double jump
+        at(1, col + .5, h)
+        press(260, 5, 40, k, axis=0)
+    ledge = T.find(3, T.ledge)
+    for k in range(8, 46):                             # coyote time: press while walking off a ledge
+        at(3, ledge + .5, T.surface(3, ledge))
+        press(160, k)
+    for k in range(100, 137, 2):                       # late double jump far below the takeoff
+        for axis in (0, 1):
+            at(3, ledge + 2.5, 10)
+            press(300, 0, k, axis=axis)
+    wall = T.find(1, T.step_up)
+    at(1, wall - 1.5, T.surface(1, wall - 2))
+    press(240)
+    at(1, wall + 1.5, T.surface(1, wall + 1))
+    press(240, axis=-1)
+    at(1, wall - 1.5, T.surface(1, wall - 2))
+    press(240, 20, 40)
+    roof = T.find(1, T.overhang)
+    for k in (1, 10, 30, 60):
+        at(1, roof + .5, T.ground_under(1, roof))
+        press(200, 5, 5 + k, axis=0)
+    for stage in (1, 2, 3):                            # falls from the top onto whatever is below
+        for c in range(10, 245, 9):
+            at(stage, c + .5, 15.5, False)
+            press(300, axis=0)
+    at(1, 0, 3)                                        # level edges, a position outside the level
+    press(80, axis=-1)
+    at(1, 255.5, 6, False)
+    press(200)
+    at(2, 239.5, 2)                                    # stage 2: the "?" box is a solid box
+    press(300, 5, 30, axis=1)
+    for stage in (1, 2, 3):                            # random play
+        for seed in range(2):
+            rng = random.Random(77 + seed * 10 + stage)
+            r.command(OP_STAGE, stage)
+            axis = 1
+            for _ in range(6000):
+                if rng.random() < .02:
+                    axis = rng.choice((1, 1, 1, 0, -1))
+                r.step(axis, rng.random() < .025)
+    return r
+
+
+PHYS_COLS = M.Model.HEADER[:17]                       # mode .. time_left
+
+
+def _write(name, words, trace):
+    os.makedirs(SIM, exist_ok=True)
+    with open(os.path.join(SIM, "cr_%s_stim.mem" % name), "w") as f:
+        f.writelines("%08X\n" % w for w in words)
+    with open(os.path.join(SIM, "cr_%s_expect.txt" % name), "w") as f:
+        f.writelines("%d %s\n" % (i, " ".join(str(v) for v in row)) for i, row in enumerate(trace))
+
+
+def gen_phys():
+    r = _phys()
+    _write("phys", r.words, r.trace)
+    print("cr phys      %6d steps, %d words" % (len(r.trace), len(r.words)))
+
+
+def gen_math():
+    """vectors for cr_math.v: op (0 mul, 1 floor divide, 2 floor square root), a, b, result - 80 bit"""
+    from math import isqrt
+    rng = random.Random(5)
+    top = (1 << 80) - 1
+    vec = [(2, 0, 0), (2, 1, 0), (2, 2, 0), (2, 3, 0), (2, 1 << 63, 0), (2, top, 0), (2, (1 << 78) - 1, 0),
+           (1, 7, 1), (1, 0, 5), (1, 5, 7), (1, top, 1), (1, top, top), (1, top, 3), (1, 1 << 79, 20736),
+           (0, 0, top), (0, top, 1), (0, 1 << 40, (1 << 40) - 1), (0, 12345, 0)]
+    for _ in range(300):
+        bits = rng.randrange(1, 81)
+        a = rng.getrandbits(bits)
+        b = rng.getrandbits(rng.randrange(1, 81 - bits)) if bits < 80 else 1
+        vec += [(0, a, b), (1, rng.getrandbits(80), rng.getrandbits(rng.randrange(1, 81)) or 1),
+                (2, rng.getrandbits(rng.randrange(1, 81)), 0)]
+    os.makedirs(SIM, exist_ok=True)
+    with open(os.path.join(SIM, "cr_math_vec.mem"), "w") as f:
+        for op, a, b in vec:
+            res = a * b if op == 0 else a // b if op == 1 else isqrt(a)
+            assert res <= top
+            f.write("%02X%020X%020X%020X\n" % (op, a, b, res))
+    print("cr math vectors: %d" % len(vec))
+
+
+def cmp(name, cols=None):
+    """RTL trace vs the model's, on the named columns (all if None)"""
+    names = M.Model.HEADER
+    cols = list(cols or names)
+    idx = [names.index(c) for c in cols]
+    e = [l.split() for l in open(os.path.join(SIM, "cr_%s_expect.txt" % name))]
+    g = [l.split() for l in open(os.path.join(SIM, "cr_%s_rtl.txt" % name))]
+    bad = 0
+    for a, b in zip(e, g):
+        d = ["%s model=%s rtl=%s" % (names[i], a[i + 1], b[i + 1] if i + 1 < len(b) else "-")
+             for i in idx if i + 1 >= len(b) or a[i + 1] != b[i + 1]]
+        if d:
+            if bad < 4:
+                print("  step %s: %s" % (a[0], "; ".join(d[:6])))
+            bad += 1
+    if len(e) != len(g):
+        print("  model has %d steps, RTL printed %d" % (len(e), len(g)))
+        bad += 1
+    ok = bad == 0
+    print("CR COSIM %s: %s (%d steps, %d columns, %d differing)" % (name, "PASS" if ok else "FAIL", len(e),
+                                                                   len(cols), bad))
+    return ok
+
+
 def play(name):
     return SCEN[name]()
 
@@ -498,9 +653,19 @@ def gen(name):
 
 
 if __name__ == "__main__":
-    if sys.argv[1:2] == ["gen"]:
+    cmd = sys.argv[1:2]
+    if cmd == ["gen"]:
         sys.exit(0 if all([gen(n) for n in (sys.argv[2:] or list(SCEN))]) else 1)
-    sys.exit("usage: cr_cosim.py gen [scenario ...]")
+    if cmd == ["genphys"]:
+        sys.exit(gen_phys())
+    if cmd == ["genmath"]:
+        sys.exit(gen_math())
+    if cmd == ["cmp"]:
+        cols = sys.argv[3:] or None
+        if cols == ["phys"]:
+            cols = PHYS_COLS
+        sys.exit(0 if cmp(sys.argv[2], cols) else 1)
+    sys.exit("usage: cr_cosim.py gen [scenario ...] | genphys | genmath | cmp NAME [phys | column ...]")
 
 
 def compare_animals(stage, steps, seed=1):

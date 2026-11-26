@@ -27,6 +27,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.dont_write_bytecode = True
 sys.path.insert(0, ROOT)
+sys.path.insert(0, HERE)
 
 import onlystage_3.settings as C          # noqa: E402
 from onlystage_3.level import Level       # noqa: E402
@@ -441,8 +442,32 @@ def write_consts():
     for k, (name, w, h) in enumerate(sprite_images()):
         ident = "%s_%dX%d" % (os.path.splitext(name)[0], w, h)
         lines.append("localparam CR_SPR_%s = %d;" % (ident.upper(), k))
+    lines += model_consts()
     with open(VH, "w") as f:
         f.write("\n".join(lines) + "\n")
+
+
+def model_consts():
+    """the numbers of cr_model.py, so cr_core.v never types one in. Lengths in units or F-units (_F)."""
+    import cr_model as M
+    from math import isqrt
+    cell = M.Q * M.F
+    signed = dict(CELL=cell, HALF_CELL=cell // 2, HALF_Q=M.Q // 2, HALF_F=M.HALF_F, NEAR_F=M.NEAR_F,
+                  PH_F=M.PH * M.F, TIE_F=M.TIE_F, TIE_X=M.TIE_X, RUN=M.RUN, RUN_F=M.RUN * M.F, G_F=M.G_F,
+                  JUMP_VY_F=M.JUMP_VY_F, DH_F=M.DOUBLE_H * M.F, SQRT_DH=isqrt(M.DOUBLE_H << 16),
+                  DOUBLE_RANGE=M.DOUBLE_RANGE, MIN_RISE=M.MIN_RISE, LEVEL_WF=M.LEVEL_W * M.F,
+                  SEVEN_Q=7 * M.Q, CAM_MAX=M.LEVEL_W - 20 * M.Q, DEATH_YF=-M.Q * M.F,
+                  PUZZLE_XF=M.PUZZLE_X * M.F, PUZZLE_YF=M.PUZZLE_Y * M.F)
+    timers = dict(COYOTE=M.COYOTE, BUFFER=M.BUFFER, DOUBLE_STEPS=M.DOUBLE_STEPS, DOUBLE_LAST=M.DOUBLE_LAST,
+                  T_LIMIT=M.T_LIMIT)
+    out = ["// ---- cr_model.py constants ----"]
+    out += ["localparam signed [47:0] CR_%s = %s48'sd%d;" % (k, "-" if v < 0 else "", abs(v))
+            for k, v in signed.items()]          # sized: several do not fit the 32-bit default
+    out += ["localparam CR_%s = %d;" % (k, v) for k, v in timers.items()]
+    out += ["localparam [2:0] CR_SPAWN_X%d = %d;" % (s, M.SPAWNS[s][0]) for s in (1, 2, 3)]
+    out += ["localparam [2:0] CR_SPAWN_Y = %d;" % M.SPAWNS[1][1]]
+    assert all(M.SPAWNS[s][1] == M.SPAWNS[1][1] for s in (2, 3))
+    return out
 
 
 def write_all(verbose=True):
