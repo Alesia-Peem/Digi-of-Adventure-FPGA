@@ -116,7 +116,8 @@ module cr_core #(
     // subroutine working values
     reg signed [47:0] bk_x, bk_y, bk_w, bk_h;              // blocked(): the box, units
     reg signed [47:0] pl_tx, pl_ty, best_s, best_x, best_y, prev_s, prev_x, prev_y, c_s, c_x, c_y;
-    reg        pl_behind, have_prev, have_best, pl_ok, c_ok;
+    reg        pl_behind, have_prev, have_best, pl_ok, c_ok, c_far, c_near;
+    reg signed [47:0] c_dx, c_dy;
     reg signed [47:0] f_x, f_y;
     reg        f_walk, f_gnd, f_still;
     reg signed [47:0] r_old, r_tgt, r_y0, r_den, r_h, r_prev, rp_y, rt_best;
@@ -166,6 +167,7 @@ module cr_core #(
     reg [8:0]  wmarks;
     reg [1:0]  sc_mode;
     reg signed [47:0] wheight;           // signed: mixed with a negative bottom, unsigned would win
+    reg [63:0] wh1;
 
     assign mode = {1'b0, mode_r};
     assign level = stage;
@@ -187,8 +189,10 @@ module cr_core #(
                S_F2 = 7'd63, S_F3 = 7'd64, S_F4 = 7'd65, S_F5 = 7'd66, S_F6 = 7'd67, S_F7 = 7'd68,
                S_RT0 = 7'd69, S_RT1 = 7'd70, S_RT2 = 7'd71, S_RT3 = 7'd72, S_RT4 = 7'd73, S_RT5 = 7'd74,
                S_RT6 = 7'd75, S_RT7 = 7'd76, S_RT8 = 7'd77, S_RT9 = 7'd78, S_PL0 = 7'd79, S_PL1 = 7'd80,
-               S_PL2 = 7'd81, S_W_USE2 = 7'd82;
-    reg [6:0] st, tj_ret, w_ret, m_ret, rs_ret, prog_ret, hit_ret, fo_ret, rq_ret, pl_ret;
+               S_PL2 = 7'd81, S_W_USE2 = 7'd82, S_DRAW = 7'd83, S_R_ENT2 = 7'd84, S_H1A = 7'd85, S_H1B = 7'd86,
+               S_W_USE3 = 7'd87, S_W_USE4 = 7'd88, S_ACM = 7'd89;
+    reg [6:0] st, tj_ret, w_ret, m_ret, rs_ret, prog_ret, hit_ret, fo_ret, rq_ret, pl_ret, dr_ret;
+    reg [3:0] dr_n;                      // draw(): shifts left
 
     // this tick's input (the levels are sampled when the tick is handled)
     reg signed [1:0] ax;
@@ -254,20 +258,10 @@ module cr_core #(
     reg edge_q;                                                 // block ROM, one clock late
     always @(posedge clk) edge_q <= edge_rom[{ent_edge, e_marks[ai[5:0]]}];
 
-    function [15:0] lfsr16;                                     // 16 steps of fpga/rtl/common/lfsr16.v
-        input [15:0] q0;
-        integer t; reg [15:0] q;
-        begin
-            q = q0;
-            for (t = 0; t < 16; t = t + 1) begin
-                q = {q[14:0], q[15] ^ q[14] ^ q[12] ^ q[3]};
-                if (q == 16'd0) q = 16'hACE1;
-            end
-            lfsr16 = q;
-        end
-    endfunction
-    wire [15:0] lfsr_next = lfsr16(lfsr);
-    wire [18:0] skin_prod = lfsr_next * ent_nskins;
+    // fpga/rtl/common/lfsr16.v, one shift; a draw (S_DRAW) is 16 shifts, one per clock (short timing path)
+    wire [15:0] lfsr_sh = {lfsr[14:0], lfsr[15] ^ lfsr[14] ^ lfsr[12] ^ lfsr[3]};
+    wire [15:0] lfsr_1 = lfsr_sh == 16'd0 ? 16'hACE1 : lfsr_sh;
+    wire [18:0] skin_prod = lfsr * ent_nskins;
 
     // waking: camera + 20 m (+ 5 m for early walkers / flyers) reaches the trigger
     wire early = (stage == 2'd2 && (ent_motion == WALK || ent_motion == FLY)) || (stage == 2'd3 && ent_motion == FLY);
@@ -302,7 +296,6 @@ module cr_core #(
     wire signed [31:0] adh = dh[31] ? -dh : dh;
     // contact box; the height product needs 55 bits, so it gets 64-bit wires of its own
     wire [63:0] a_h1 = {16'd0, CR_ANIMAL_H} * {57'd0, wexp};
-    wire [63:0] a_h2 = a_h1 * {16'd0, CR_H120_M};
     // contact box
     wire signed [47:0] a_xf = $signed({{16{wx[31]}}, wx}) <<< 8;
     wire signed [47:0] a_half = ent_species == 2'd3 ? CR_HALF_GOOSE_F : CR_HALF_OTHER_F;
@@ -336,16 +329,10 @@ module cr_core #(
     wire signed [47:0] pc_x1 = pl_tx < pc_lo ? pc_lo : pl_tx;
     wire signed [47:0] pc_x  = pc_x1 > pc_hi ? pc_hi : pc_x1;
     wire signed [47:0] pc_y  = uy + uh;
-    wire pc_skip = ux > pl_tx + CR_TEN_Q || ux + uw < pl_tx - CR_TEN_Q
-                || (pl_behind && (face_l ? pc_x - px_u : px_u - pc_x) < CR_GAP - CR_TOL_X);
-    wire signed [47:0] pc_s = 5 * sabs(pc_x - pl_tx) + 8 * sabs(pc_y - pl_ty)
-                            + (sabs(pc_x - px_u) < CR_NEAR_PLAYER ? CR_TEN_Q : 48'sd0);
-    // question pair: two draws (random.sample of 2 from 15)
-    wire [15:0] lfsr_2 = lfsr16(lfsr_next);
-    wire [19:0] qi_p = lfsr_next * 4'd15;
-    wire [19:0] qj_p = lfsr_2 * 4'd14;
-    wire [3:0]  qi = qi_p[19:16];
-    wire [3:0]  qj = qj_p[19:16] + (qj_p[19:16] >= qi_p[19:16] ? 4'd1 : 4'd0);
+    wire pc_far = ux > pl_tx + CR_TEN_Q || ux + uw < pl_tx - CR_TEN_Q;     // then 3 more clocks (timing)
+    // question pair (random.sample of 2 from 15): q0 = draw * 15 >> 16, then j = draw * 14 >> 16, q1 = j + (j >= q0)
+    wire [19:0] qi_p = lfsr * 4'd15;
+    wire [19:0] qj_p = lfsr * 4'd14;
     // lifts
     wire signed [47:0] lift_y0 = lt0 <<< 8, lift_y1 = lt1 <<< 8;
     wire ride0 = grounded && sabs(yf - lift_y0) <= CR_TIE_F && xf + CR_HALF_F > CR_LIFT0_BX_F + CR_TIE_X
@@ -545,8 +532,10 @@ module cr_core #(
         S_R_ENT: begin                   // new animals, each drawing its skin from the shared generator
             if (ai == (stage == 2'd1 ? CR_ENT_COUNT1 : stage == 2'd2 ? CR_ENT_COUNT2 : CR_ENT_COUNT3)) begin
                 st <= rs_ret;
-            end else begin
-                lfsr <= lfsr_next;
+            end else begin dr_ret <= S_R_ENT2; dr_n <= 4'd15; st <= S_DRAW; end
+        end
+        S_R_ENT2: begin
+            begin
                 e_skin[ai[5:0]] <= skin_prod[18:16];
                 e_x[ai[5:0]] <= ent_x0; e_y[ai[5:0]] <= ent_y0; e_vy[ai[5:0]] <= 0; e_dl[ai[5:0]] <= 1'b1;
                 e_active[ai] <= ent_active0; e_alive[ai] <= 1'b1;
@@ -556,7 +545,12 @@ module cr_core #(
                     e_slot[ai[5:0]] <= slots; p_w[slots] <= 6'd0; p_cnt[slots] <= 6'd0; slots <= slots + 3'd1;
                 end
                 ai <= ai + 7'd1;
+                st <= S_R_ENT;
             end
+        end
+        S_DRAW: begin                    // one LFSR shift per clock, 16 in all
+            lfsr <= lfsr_1;
+            if (dr_n == 4'd0) st <= dr_ret; else dr_n <= dr_n - 4'd1;
         end
 
         // ---------------- one step (cr_model.step) ----------------
@@ -750,7 +744,11 @@ module cr_core #(
             end
         end
         S_H1: begin                      // the interview: two questions, the world stops for 5 s
-            rvisible <= pl_ok; q0 <= qi; q1 <= qj; lfsr <= lfsr_2;
+            rvisible <= pl_ok; dr_ret <= S_H1A; dr_n <= 4'd15; st <= S_DRAW;
+        end
+        S_H1A: begin q0 <= qi_p[19:16]; dr_ret <= S_H1B; dr_n <= 4'd15; st <= S_DRAW; end
+        S_H1B: begin
+            q1 <= qj_p[19:16] + (qj_p[19:16] >= q0 ? 4'd1 : 4'd0);
             chase <= 1'b0; interview <= CR_T_INTERVIEW; notify(4'd0);
             st <= hit_ret;
         end
@@ -934,8 +932,12 @@ module cr_core #(
             st <= S_AC;
         end
         S_AC: begin                      // touched? (game.py:605-617)
-            wheight <= a_h2[63:33];      // ANIMAL_H * exposure // 120
-            st <= (walive && wact && wexp != 7'd0 && wwl == 4'd0) ? S_AC2 : S_AW;
+            wh1 <= a_h1;
+            st <= (walive && wact && wexp != 7'd0 && wwl == 4'd0) ? S_ACM : S_AW;
+        end
+        S_ACM: begin                     // ANIMAL_H * exposure // 120, the second multiply in its own clock
+            wheight <= (wh1 * {16'd0, CR_H120_M}) >> 33;
+            st <= S_AC2;
         end
         S_AC2: begin
             if (xf - CR_HALF_F < a_xf + a_half - CR_TIE_X && xf + CR_HALF_F > a_xf - a_half + CR_TIE_X
@@ -1061,7 +1063,7 @@ module cr_core #(
                 W_WATER: if (touch_b) begin found <= 1'b1; st <= w_ret; end
                 W_BLOCK: if (bk_hit) begin found <= 1'b1; st <= w_ret; end
                 W_PLACE: begin
-                    c_s <= pc_s; c_x <= pc_x; c_y <= pc_y; c_ok <= !pc_skip; st <= S_W_USE2;
+                    c_x <= pc_x; c_y <= pc_y; c_far <= pc_far; st <= S_W_USE2;
                 end
                 W_TEA: if (ux <= tea_x && tea_x < ux + uw && tea_old >= uy + uh - CR_TOL_Y && tea_y <= uy + uh) begin
                     tea_y <= uy + uh; tea_vy <= 0;
@@ -1077,7 +1079,17 @@ module cr_core #(
                 end
             endcase
         end
-        S_W_USE2: begin                  // place: keep the smallest candidate above the last one tried
+        S_W_USE2: begin                  // place: the candidate's score, over three clocks
+            c_ok <= !c_far && !(pl_behind && (face_l ? c_x - px_u : px_u - c_x) < CR_GAP - CR_TOL_X);
+            c_dx <= sabs(c_x - pl_tx); c_dy <= sabs(c_y - pl_ty);
+            c_near <= sabs(c_x - px_u) < CR_NEAR_PLAYER;
+            st <= S_W_USE3;
+        end
+        S_W_USE3: begin
+            c_s <= 5 * c_dx + 8 * c_dy + (c_near ? CR_TEN_Q : 48'sd0);
+            st <= S_W_USE4;
+        end
+        S_W_USE4: begin                  // place: keep the smallest candidate above the last one tried
             if (c_ok && (!have_prev || lex_lt(prev_s, prev_x, prev_y, c_s, c_x, c_y))
                      && (!have_best || lex_lt(c_s, c_x, c_y, best_s, best_x, best_y))) begin
                 best_s <= c_s; best_x <= c_x; best_y <= c_y; have_best <= 1'b1;

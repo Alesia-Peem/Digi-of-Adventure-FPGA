@@ -141,9 +141,15 @@ measure the worst line in the frame model (3 200 clk per line).
 
 ## 4. Publish fields (core → `ui_composer`)
 
-The core keeps every value below in registers (names in `cr_core.v`); the publisher packs them once per frame.
-I propose `q_idx`/`q_data` (already on the port, still 0) as the read port for the per-animal slots, and plain
-outputs for the scalars — tell me the field list format of `ui_spec.py` you want and I will add it to the core.
+**Not on any port yet.** Today `cr_core` exposes only `mode`, `level`, `exit_req`, `busy`, `step_done`;
+`cam_px` and `q_data` are placeholders that stay 0. Every value in the table below exists as a register inside
+`cr_core.v` (names given), but the publisher cannot read it until this branch adds the ports. That is the next
+piece of work on this branch, and it needs one answer from you first: **the field format you want** (the
+`ui_spec.py` FIELD/COND style of Stages 1/2, or a read port `q_idx` → `q_data` per slot plus scalar outputs).
+Until then nothing of Stage 3 can be drawn.
+
+Also needed on the port: `n_ents` (animals of the current level). `e_active` / `e_alive` bits at and above
+`n_ents` are left over from the previous level and must be ignored.
 
 | Field | Source | Pygame |
 |---|---|---|
@@ -159,6 +165,23 @@ outputs for the scalars — tell me the field list format of `ui_spec.py` you wa
 | modal | `mode` PAUSE / CLEAR / WIN, stage | `hud.py:141-180` |
 
 Texts: 15 messages and 15 question pairs are English (`settings.py:65-83`, `game.py`), no Thai at run time.
+
+## 4a. Visual effects (decision D2: keep all of them; ask before dropping any)
+
+None of these change the game, so neither `cr_model.py` nor `cr_core.v` models them yet.
+
+| Effect | Pygame | State it needs | Proposal |
+|---|---|---|---|
+| Footprints of the player and walking / patrolling animals, fading over 2 s, up to 72 | `game.py:402-410` `footprint()`, `winter_art.py:15-39` `tracks` | the game's `prints` deque and `last_steps` per actor: real game state, updated every step | **decision for the user:** add it to the model and core (about 72 × (x, y, age, kind, direction, side) + one "last step" per actor), or approximate it in the publisher |
+| Snowfall (stage 2), night stars (stage 3), wind lines (stages 1–2) | `winter_art.py:5-13`, `42-53`, `67-75` | game time (`now`), camera | generated in the renderer / publisher from `now` and `cam` |
+| Water bob lines | `render.py:108-111` | `now` | in the tile layer (section 2) |
+| Tea sparkles (7 points) | `winter_art.sparkles`, `render.py:128` | tea position, `now` | display-list points from the publisher |
+| Phase flash ring (16 short lines) | `render.py:187-195` | `flash` (published), player position | display-list lines or a ring primitive |
+| Cloak / gold / phase particles (9 small rectangles) | `render.py:178-182` | `now`, player position, form | display-list rectangles from the publisher |
+| Cloak ghosts (3 translucent copies) | `render.py:196-198` | player position, facing | three extra `SPRITE2` entries (section 3) |
+
+All of them cost display-list entries (limit 256) and line time; the frame model should measure the worst
+line with every effect on before anything is dropped.
 
 ## 5. Build files
 

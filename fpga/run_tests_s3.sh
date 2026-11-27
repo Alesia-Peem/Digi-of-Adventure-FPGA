@@ -42,9 +42,20 @@ vvp -n sim/build/cr_tb_cosim_a.vvp +STIM=sim/cr_animals_stim.mem +OUT=sim/cr_ani
 (cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py cmp animals animals)
 echo "== 7. RTL full game (reporter, skills, lifts, tea, doors, flow) vs the model, every scenario of section 3"
 $IV -o sim/build/cr_tb_cosim_f.vvp rtl/stage3/cr_math.v rtl/stage3/cr_core.v tb/cr_tb_cosim.v
-for s in plan1 plan2 plan3 careless skill interview pit lift timeout restart buttons; do
-  vvp -n sim/build/cr_tb_cosim_f.vvp +STIM=sim/cr_${s}_stim.mem +OUT=sim/cr_${s}_rtl.txt > /dev/null
+for s in plan1 plan2 plan3 careless skill interview pit lift timeout restart buttons retreat; do
+  vvp -n sim/build/cr_tb_cosim_f.vvp +STIM=sim/cr_${s}_stim.mem +OUT=sim/cr_${s}_rtl.txt > sim/cr_${s}_tb.log
+  grep -q "unknown registers: 0 steps" sim/cr_${s}_tb.log || { echo "unknown register values in $s"; exit 1; }
   (cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py cmp $s)
+done
+
+echo "== 7b. the same at 2 steps per tick (the board), plus skill pressed on death / refusal / clear ticks"
+S2="deathskill skill buttons careless interview restart retreat plan2"
+(cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py gen2 $S2)
+$IV -Pcr_tb_cosim.STEPS=2 -o sim/build/cr_tb_cosim_f2.vvp rtl/stage3/cr_math.v rtl/stage3/cr_core.v tb/cr_tb_cosim.v
+for s in $S2; do
+  vvp -n sim/build/cr_tb_cosim_f2.vvp +STIM=sim/cr_${s}2_stim.mem +OUT=sim/cr_${s}2_rtl.txt > sim/cr_${s}2_tb.log
+  grep -q "unknown registers: 0 steps" sim/cr_${s}2_tb.log || { echo "unknown register values in ${s}2"; exit 1; }
+  (cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py cmp ${s}2)
 done
 
 echo "== 8. RTL button / command timing at 2 steps per tick"
