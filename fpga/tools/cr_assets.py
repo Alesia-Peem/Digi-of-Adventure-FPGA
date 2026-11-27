@@ -457,7 +457,13 @@ def model_consts():
                   JUMP_VY_F=M.JUMP_VY_F, DH_F=M.DOUBLE_H * M.F, SQRT_DH=isqrt(M.DOUBLE_H << 16),
                   DOUBLE_RANGE=M.DOUBLE_RANGE, MIN_RISE=M.MIN_RISE, LEVEL_WF=M.LEVEL_W * M.F,
                   SEVEN_Q=7 * M.Q, CAM_MAX=M.LEVEL_W - 20 * M.Q, DEATH_YF=-M.Q * M.F,
-                  PUZZLE_XF=M.PUZZLE_X * M.F, PUZZLE_YF=M.PUZZLE_Y * M.F)
+                  PUZZLE_XF=M.PUZZLE_X * M.F, PUZZLE_YF=M.PUZZLE_Y * M.F,
+                  Q=M.Q, HALF_QU=M.Q // 2, ENEMY=M.ENEMY, SINK_WATER=M.SINK_WATER, WALK_G=M.WALK_G,
+                  ANIMAL_H=M.ANIMAL_H, HALF_GOOSE_F=M.HALF_GOOSE * M.F, HALF_OTHER_F=M.HALF_OTHER * M.F,
+                  ANT_STEP=M.Q // M.ANT_RAMP, WAKE20=20 * M.Q, WAKE25=25 * M.Q, KILL_X=-3 * M.Q,
+                  KILL_Y=-2 * M.Q, H120_M=71582789)
+    # floor(ANIMAL_H * e / 120) == (ANIMAL_H * e * H120_M) >> 33 for every exposure e = 0..120
+    assert all((M.ANIMAL_H * e * 71582789) >> 33 == M.ANIMAL_H * e // M.ANT_RAMP for e in range(121))
     timers = dict(COYOTE=M.COYOTE, BUFFER=M.BUFFER, DOUBLE_STEPS=M.DOUBLE_STEPS, DOUBLE_LAST=M.DOUBLE_LAST,
                   T_LIMIT=M.T_LIMIT)
     out = ["// ---- cr_model.py constants ----"]

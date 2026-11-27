@@ -232,7 +232,7 @@ class Model:
               "facing", "walking", "cam", "stride", "time_left", "skill", "used", "chase", "interview", "protection",
               "follow", "retreat", "flash", "notice", "message", "gold", "opened", "tea_on", "tea_x", "tea_y",
               "lift0", "lift1", "rep_x", "rep_y", "rep_dir", "rep_visible", "rep_walking", "q0", "q1", "progress",
-              "near", "grow", "exit", "lfsr", "ent_x", "ent_y", "ent_active", "ent_alive", "ent_exposure")
+              "near", "grow", "exit", "lfsr", "ent_x", "ent_y", "ent_active", "ent_alive", "ent_exposure", "contacts")
 
     def snapshot(self):
         """every value cr_core.v must reproduce after each step, in HEADER order"""
@@ -252,7 +252,8 @@ class Model:
                 self.follow, self.retreat, self.flash, self.notice, self.message, int(self.gold), int(self.opened),
                 int(self.tea is not None), tea[0], tea[1], lifts[0], lifts[1], self.rx, self.ry, self.rdir,
                 int(self.rvisible), int(self.rwalking), q[0], q[1], self.progress, int(self.near), self.grow,
-                int(self.exit_req), self.rng.q, ex, ey, active, alive, exposure)
+                int(self.exit_req), self.rng.q, ex, ey, active, alive, exposure,
+                sum(1 << i for i in self.contacts))
 
     def teleport(self, x, y, grounded):
         self.xf, self.yf, self.vyf, self.grounded = x * F, y * F, 0, grounded

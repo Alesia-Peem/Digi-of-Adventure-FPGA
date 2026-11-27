@@ -35,4 +35,9 @@ for steps in 1 2; do
   vvp -n sim/build/cr_tb_cosim_p$steps.vvp +STIM=sim/cr_${name}_stim.mem +OUT=sim/cr_${name}_rtl.txt | grep CR_TB
   (cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py cmp $name phys)
 done
+echo "== 6. RTL animals (patrol, follower, walk + water, fly, pop) and contacts vs the model, bit exact"
+(cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py genanimals)
+$IV -Pcr_tb_cosim.PHYS=2 -o sim/build/cr_tb_cosim_a.vvp rtl/stage3/cr_math.v rtl/stage3/cr_core.v tb/cr_tb_cosim.v
+vvp -n sim/build/cr_tb_cosim_a.vvp +STIM=sim/cr_animals_stim.mem +OUT=sim/cr_animals_rtl.txt | grep CR_TB
+(cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py cmp animals animals)
 echo "CR TESTS: PASS"

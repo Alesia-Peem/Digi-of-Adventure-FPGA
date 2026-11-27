@@ -483,8 +483,8 @@ class PhysRun:
     """model only, with no animals and no lifts: the stimulus for the player/collision hardware (Task 7).
     The model was checked against game.py on these situations by cr_test_model.py."""
 
-    def __init__(self):
-        self.m = model(1, physics_only=True)
+    def __init__(self, m=None):
+        self.m = m or model(1, physics_only=True)
         self.words, self.trace = [], []
 
     def command(self, op, arg=0):
@@ -494,6 +494,8 @@ class PhysRun:
             self.m.restart()
         elif op == OP_PUT:
             self.m.teleport((arg & 511) * M.Q // 2, (arg >> 9 & 31) * M.Q // 2, bool(arg >> 14 & 1))
+        elif op == OP_SEED:
+            self.m.rng.q = arg or M.SEED
 
     def put(self, x, y, grounded=True):
         assert x * 2 == int(x * 2) and y * 2 == int(y * 2) and 0 <= x < 256 and 0 <= y < 16
@@ -574,6 +576,39 @@ def _phys():
 
 
 PHYS_COLS = M.Model.HEADER[:17]                       # mode .. time_left
+ANIMAL_COLS = PHYS_COLS + ("lfsr", "ent_x", "ent_y", "ent_active", "ent_alive", "ent_exposure", "contacts")
+
+
+def animal_model():
+    """the model the Task 8 hardware is compared with: animals on, no lifts, hit() records nothing"""
+    m = model(1)
+    m.no_lifts = True
+    m.hit = lambda: None
+    m.restart()
+    return m
+
+
+def gen_animals(steps=8000):
+    """drag the player along each level (one PUT per step) so every animal wakes; deaths and restarts happen too"""
+    r = PhysRun(animal_model())
+    r.command(OP_SEED, 0x1234)                         # the generator starts from a stated value
+    rng = random.Random(8)
+    for stage in (1, 2, 3):
+        r.command(OP_STAGE, stage)
+        solid = tables()[stage][0]
+        lift = 0
+        for t in range(steps):
+            x = round((2 + 240 * t / steps) * 2) / 2
+            if t % 90 == 0:
+                lift = rng.choice((0, 0, 0, 1, 2))
+            r.put(x, min((solid[int(x)].bit_length() or 9) + lift, 15))
+            r.step(rng.choice((0, 0, 1, -1)), rng.random() < .02)
+    r.command(OP_STAGE, 1)                             # and a stretch of free play with restarts
+    for t in range(6000):
+        r.step(1 if t % 500 < 420 else -1, t % 37 == 0)
+    assert all(row[0] == M.PLAY for row in r.trace), "the animal stimulus reached a door"
+    _write("animals", r.words, r.trace)
+    print("cr animals   %6d steps, %d words" % (len(r.trace), len(r.words)))
 
 
 def _write(name, words, trace):
@@ -678,12 +713,16 @@ if __name__ == "__main__":
         sys.exit(0 if all([gen(n) for n in (sys.argv[2:] or list(SCEN))]) else 1)
     if cmd == ["genphys"]:
         sys.exit(gen_phys())
+    if cmd == ["genanimals"]:
+        sys.exit(gen_animals())
     if cmd == ["genmath"]:
         sys.exit(gen_math())
     if cmd == ["cmp"]:
         cols = sys.argv[3:] or None
         if cols == ["phys"]:
             cols = PHYS_COLS
+        elif cols == ["animals"]:
+            cols = ANIMAL_COLS
         sys.exit(0 if cmp(sys.argv[2], cols) else 1)
     sys.exit("usage: cr_cosim.py gen [scenario ...] | genphys | genmath | cmp NAME [phys | column ...]")
 

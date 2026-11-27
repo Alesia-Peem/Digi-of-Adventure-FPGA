@@ -5,14 +5,14 @@
 //   parameter STEPS: steps per tick (1 = one step per stimulus word; 2 = the board)
 `timescale 1ns/1ps
 module cr_tb_cosim;
-    parameter PHYS = 0;
+    parameter PHYS = 0;      // cr_core TEST_MODE: 0 full game, 1 no animals/lifts, 2 animals without lifts and hits
     parameter STEPS = 1;
     reg clk = 0, rst = 1;
     always #5 clk = ~clk;
     reg gtick = 0, bl = 0, br = 0, ej = 0, es = 0, em = 0, enter = 0, dcmd = 0;
     reg [3:0] dop = 0; reg [15:0] darg = 0;
     wire busy, step_done, exit_req; wire [2:0] mode; wire [1:0] level; wire [12:0] cam_px; wire [31:0] q_data;
-    cr_core #(.MEM_DIR("mem/"), .STEPS_PER_TICK(STEPS), .PHYS_ONLY(PHYS)) dut (
+    cr_core #(.MEM_DIR("mem/"), .STEPS_PER_TICK(STEPS), .TEST_MODE(PHYS)) dut (
         .clk(clk), .rst(rst), .gtick(gtick), .btn_left(bl), .btn_right(br), .ev_jump(ej), .ev_skill(es),
         .ev_menu(em), .enter(enter), .demo_cmd(dcmd), .demo_op(dop), .demo_arg(darg), .exit_req(exit_req),
         .step_done(step_done), .busy(busy), .mode(mode), .level(level), .cam_px(cam_px), .q_idx(6'd0),
@@ -22,11 +22,22 @@ module cr_tb_cosim;
     reg [1023:0] sf, of;
     integer n, i, fd, steps, worst, t;
     // one line per step, in HEADER order; columns not built yet print 0
+    reg [31:0] ex, ey, eexp; reg [63:0] eact, ealive; integer j;
     always @(posedge clk) if (step_done) begin
-        $fdisplay(fd, "%0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %s", steps,
+        ex = 0; ey = 0; eexp = 0; eact = 0; ealive = 0;
+        for (j = 0; j < dut.n_ents; j = j + 1) begin
+            ex = ex + (j + 1) * dut.e_x[j];
+            ey = ey + (j + 1) * dut.e_y[j];
+            eexp = eexp + (j + 1) * dut.e_exp[j];
+            eact[j] = dut.e_active[j];
+            ealive[j] = dut.e_alive[j];
+        end
+        $fdisplay(fd, "%0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %s %0d %0d %0d %0d %0d %0d %0d",
+            steps,
             dut.mode_r, dut.stage, dut.xf, dut.yf, dut.vyf, dut.gf, dut.vxf, dut.jumps, dut.elapsed, dut.grounded,
             dut.grace, dut.buffer, dut.face_l ? -1 : 1, dut.walking, dut.cam, dut.stride, dut.time_left,
-            "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0");
+            "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+            dut.lfsr, ex, ey, eact, ealive, eexp, dut.contacts);
         steps = steps + 1;
     end
     initial begin

@@ -1,10 +1,10 @@
 // cr_core.v - Stage 3 "Campus Run" game logic (onlystage_3/game.py) as a sequencer.
 // Reference: tools/cr_model.py, bit for bit after every 1/120 s step (tb/cr_tb_cosim.v + tools/cr_cosim.py cmp).
 //
-// Built so far (plan Task 7): player physics, jump / double jump / coyote / buffer, collision against the
-// 250 x 11 tile grid and the extra boxes (the stage-2 "?" box), deaths (fall, water, time-out), restart,
-// pause, and the commands STAGE and PUT. Animals (Task 8) and reporter / skills / lifts / tea / doors (Task 9)
-// are not built yet.
+// Built so far: player physics, jump / double jump / coyote / buffer, collision against the 250 x 11 tile grid and
+// the extra boxes (the stage-2 "?" box), deaths (fall, water, time-out), restart, pause, the commands STAGE and
+// PUT (Task 7); the animals - patrol, follower, walk + water, fly, pop - and their contact test (Task 8).
+// Reporter / skills / lifts / tea / doors (Task 9) are not built yet: a new contact does nothing so far.
 //
 // Numbers (cr_model.py): 1 m = Q = 600*4096 units; player x / y / speeds / gravity carry 8 more fraction bits
 // ("F units"). The grid is visited in the game's list order - rows top to bottom, columns left to right, then
@@ -14,13 +14,15 @@
 // Each gtick runs STEPS_PER_TICK steps (2 on the board: 120 steps/s at the 60 Hz tick); jump and skill count for
 // the first of them only. demo_cmd (op, arg) is a command applied between steps:
 //   1 STAGE  restart at stage arg (1..3)      2 PUT  player to x = arg[8:0]/2 m, y = arg[13:9]/2 m, standing arg[14]
+//   3 SEED   random generator state = arg (0 means 0xACE1)
 // A command, enter or gtick arriving while busy is kept and handled when the core is free (commands first),
 // so no press is lost; presses that arrive before a waiting tick is handled join that tick.
 `timescale 1ns/1ps
 module cr_core #(
     parameter MEM_DIR        = "mem/",
     parameter STEPS_PER_TICK = 2,
-    parameter PHYS_ONLY      = 0         // 1: no animals and no lifts (the Task 7 stimulus)
+    parameter TEST_MODE      = 0         // 0 the game; 1 no animals, no lifts (Task 7 stimulus);
+                                         // 2 animals but no lifts, a contact starts nothing (Task 8 stimulus)
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -46,7 +48,7 @@ module cr_core #(
 `include "cr_consts.vh"
 
     localparam PLAY = 2'd0, PAUSE = 2'd1, CLEAR = 2'd2, WIN = 2'd3;
-    localparam OP_STAGE = 4'd1, OP_PUT = 4'd2;
+    localparam OP_STAGE = 4'd1, OP_PUT = 4'd2, OP_SEED = 4'd3;
     localparam M_MUL = 2'd0, M_DIV = 2'd1, M_SQRT = 2'd2;
     // what the box walker does with each box
     localparam W_XPASS = 2'd0, W_YPASS = 2'd1, W_REACH = 2'd2, W_WATER = 2'd3;
@@ -80,6 +82,45 @@ module cr_core #(
     reg signed [47:0] ex_w [0:2];
     reg signed [47:0] ex_h [0:2];
 
+    // ---------------- animals ----------------
+    localparam PATROL = 2'd0, WALK = 2'd1, FLY = 2'd2, POP = 2'd3;
+    localparam SC_PATROL = 2'd0, SC_STEP = 2'd1, SC_FALL = 2'd2, SC_WATER = 2'd3;
+    reg [CR_ENT_W-1:0] ent_rom [0:191];       // cr_assets.ENT_FIELDS, level*64 + index
+    reg               edge_rom [0:34815];     // cr_assets.edge_bits patterns, pattern*512 + mark
+    initial begin
+        $readmemh({MEM_DIR, "cr_ent.mem"}, ent_rom);
+        $readmemh({MEM_DIR, "cr_edge.mem"}, edge_rom);
+    end
+    reg [15:0] lfsr;
+    reg [6:0]  n_ents;                        // animals of this level (0 in TEST_MODE 1)
+    reg [63:0] e_active, e_alive, contacts, contacts_new;
+    reg signed [31:0] e_x [0:63];
+    reg signed [31:0] e_y [0:63];
+    reg signed [31:0] e_vy [0:63];
+    reg        e_dl [0:63];                   // 1: moving left (direction -1)
+    reg [6:0]  e_exp [0:63];                  // exposure 0..120
+    reg [9:0]  e_phase [0:63];
+    reg [3:0]  e_wl [0:63];                   // waterline = e_wl * Q, 0 = none
+    reg [8:0]  e_marks [0:63];
+    reg [2:0]  e_skin [0:63];
+    reg [2:0]  e_slot [0:63];                 // follower: which path ring
+    reg signed [31:0] p_x [0:511];            // follower paths: slot*64 + entry
+    reg signed [31:0] p_y [0:511];
+    reg        p_d [0:511];
+    reg [5:0]  p_w [0:7];                     // next entry to write
+    reg [5:0]  p_cnt [0:7];                   // entries held, saturates at 61
+    reg [2:0]  slots;
+    reg [6:0]  ai;
+    // the animal being processed
+    reg signed [31:0] wx, wy, wvy, wold, wseen, wfold, wbest, wbestd;
+    reg        wdl, wact, walive, whave;
+    reg [6:0]  wexp;
+    reg [9:0]  wphase;
+    reg [3:0]  wwl, sr;
+    reg [8:0]  wmarks;
+    reg [1:0]  sc_mode;
+    reg signed [47:0] wheight;           // signed: mixed with a negative bottom, unsigned would win
+
     assign mode = {1'b0, mode_r};
     assign level = stage;
     assign exit_req = 1'b0;
@@ -91,7 +132,9 @@ module cr_core #(
                S_END = 6'd12, S_MWAIT = 6'd13, S_W_INIT = 6'd14, S_W_GET = 6'd15, S_W_USE = 6'd16,
                S_TJ = 6'd17, S_TJ_R1 = 6'd18, S_TJ_R2 = 6'd19, S_TJ_R3 = 6'd20, S_TJ_D1 = 6'd21,
                S_TJ_D2 = 6'd22, S_TJ_D3 = 6'd23, S_TJ_D4 = 6'd24, S_TJ_D5 = 6'd25, S_TJ_D6 = 6'd26,
-               S_TJ_D7 = 6'd27;
+               S_TJ_D7 = 6'd27, S_R_ENT = 6'd28, S_A0 = 6'd29, S_A1 = 6'd30, S_A2 = 6'd31, S_A3 = 6'd32,
+               S_A4 = 6'd33, S_SCAN = 6'd34, S_A_FALL = 6'd35, S_A9 = 6'd36, S_AC = 6'd37, S_AC2 = 6'd38,
+               S_AW = 6'd39;
     reg [5:0] st, tj_ret, w_ret, m_ret;
 
     // this tick's input (the levels are sampled when the tick is handled)
@@ -140,6 +183,78 @@ module cr_core #(
     wire signed [47:0] b_top = by + bh;
     wire under_b = (xf + CR_HALF_F > bx + CR_TIE_X) && (xf - CR_HALF_F < bx + bw - CR_TIE_X);
     wire touch_b = under_b && (yf < b_top - CR_TIE_F) && (yf + CR_PH_F > by + CR_TIE_F);
+
+    // ---------------- animal helpers ----------------
+    wire [CR_ENT_W-1:0] ew = ent_rom[{lvl, ai[5:0]}];
+    wire signed [31:0] ent_x0   = ew[CR_ENT_X_LSB +: 32];
+    wire signed [31:0] ent_y0   = ew[CR_ENT_Y_LSB +: 32];
+    wire signed [31:0] ent_base = ew[CR_ENT_BASE_Y_LSB +: 32];
+    wire signed [31:0] ent_lo   = ew[CR_ENT_LO_LSB +: 32];
+    wire signed [31:0] ent_hi   = ew[CR_ENT_HI_LSB +: 32];
+    wire signed [31:0] ent_trig = ew[CR_ENT_TRIGGER_LSB +: 32];
+    wire [1:0] ent_species = ew[CR_ENT_SPECIES_LSB +: 2];
+    wire [1:0] ent_motion  = ew[CR_ENT_MOTION_LSB +: 2];
+    wire [5:0] ent_leader1 = ew[CR_ENT_LEADER1_LSB +: 6];      // leader index + 1, 0 = none
+    wire       ent_active0 = ew[CR_ENT_ACTIVE_LSB];
+    wire [2:0] ent_nskins  = ew[CR_ENT_NSKINS_LSB +: 3];
+    wire [6:0] ent_edge    = ew[CR_ENT_EDGE_LSB +: 7];
+    reg edge_q;                                                 // block ROM, one clock late
+    always @(posedge clk) edge_q <= edge_rom[{ent_edge, e_marks[ai[5:0]]}];
+
+    function [15:0] lfsr16;                                     // 16 steps of fpga/rtl/common/lfsr16.v
+        input [15:0] q0;
+        integer t; reg [15:0] q;
+        begin
+            q = q0;
+            for (t = 0; t < 16; t = t + 1) begin
+                q = {q[14:0], q[15] ^ q[14] ^ q[12] ^ q[3]};
+                if (q == 16'd0) q = 16'hACE1;
+            end
+            lfsr16 = q;
+        end
+    endfunction
+    wire [15:0] lfsr_next = lfsr16(lfsr);
+    wire [18:0] skin_prod = lfsr_next * ent_nskins;
+
+    // waking: camera + 20 m (+ 5 m for early walkers / flyers) reaches the trigger
+    wire early = (stage == 2'd2 && (ent_motion == WALK || ent_motion == FLY)) || (stage == 2'd3 && ent_motion == FLY);
+    wire wakes = cam + (early ? CR_WAKE25 : CR_WAKE20) >= ent_trig;
+    // follower ring
+    wire [2:0] fslot = e_slot[ai[5:0]];
+    wire [5:0] fw = p_w[fslot];
+    wire [5:0] fcnt_new = p_cnt[fslot] == 6'd61 ? 6'd61 : p_cnt[fslot] + 6'd1;
+    wire [8:0] f_old = {fslot, fw + 6'd4};                     // the entry written 60 appends ago
+    wire [5:0] lead = ent_leader1 - 6'd1;
+    // ant: up 1 s, stay 2 s, down 1 s of a 6 s cycle
+    wire [9:0] ph_next = wphase == 10'd719 ? 10'd0 : wphase + 10'd1;
+    wire signed [11:0] ant_t = $signed({2'b0, ph_next}) - 12'sd240;
+    wire signed [11:0] ant_m = ant_t < 12'sd480 - ant_t ? ant_t : 12'sd480 - ant_t;
+    wire [6:0] ant_exp = ant_m < 0 ? 7'd0 : ant_m > 12'sd120 ? 7'd120 : ant_m[6:0];
+    // exactly on a half-metre mark?
+    wire [31:0] wabs = wx[31] ? -wx : wx;
+    wire [16:0] half_k = wabs[30:14];
+    wire [16:0] whole_k = {1'b0, wabs[30:15]};
+    wire on_half  = wabs[13:0] == 14'd0 && div75(half_k) * 75 == half_k;
+    wire on_whole = wabs[14:0] == 15'd0 && div75(whole_k) * 75 == whole_k;
+    // the column of the animal (what the game "sees", seen // Q)
+    wire [16:0] seen_k = wseen[31:15];
+    wire [8:0]  seen_c = div75(seen_k);
+    wire        col_ok = !wseen[31] && seen_c < 9'd250;
+    wire [10:0] a_solid = solid_rom[{lvl, seen_c[7:0]}];
+    wire [10:0] a_water = water_rom[{lvl, seen_c[7:0]}];
+    wire [10:0] a_surf  = a_solid & ~(a_solid >> 1);
+    wire signed [31:0] row_top = $signed({28'd0, sr}) * CR_Q + CR_Q;          // (sr + 1) * Q
+    wire signed [31:0] row_bot = $signed({28'd0, sr}) * CR_Q;
+    wire signed [31:0] dh = row_top - wy;
+    wire signed [31:0] adh = dh[31] ? -dh : dh;
+    // contact box; the height product needs 55 bits, so it gets 64-bit wires of its own
+    wire [63:0] a_h1 = {16'd0, CR_ANIMAL_H} * {57'd0, wexp};
+    wire [63:0] a_h2 = a_h1 * {16'd0, CR_H120_M};
+    // contact box
+    wire signed [47:0] a_xf = $signed({{16{wx[31]}}, wx}) <<< 8;
+    wire signed [47:0] a_half = ent_species == 2'd3 ? CR_HALF_GOOSE_F : CR_HALF_OTHER_F;
+    wire signed [31:0] a_bot_u = ent_motion == POP ? ent_base : wy;
+    wire signed [47:0] a_bot = $signed({{16{a_bot_u[31]}}, a_bot_u}) <<< 8;
 
     // ---------------- arithmetic unit ----------------
     reg m_start; reg [1:0] m_op; reg [79:0] m_a, m_b;
@@ -201,6 +316,7 @@ module cr_core #(
         if (gtick && ev_menu) menu_pend <= 1'b1;
         if (rst) begin
             st <= S_RESTART; stage <= 2'd1; cmd_pend <= 1'b0; enter_pend <= 1'b0; cam_px <= 13'd0;
+            lfsr <= 16'hACE1;
             tick_pend <= 1'b0; jump_pend <= 1'b0; skill_pend <= 1'b0; menu_pend <= 1'b0; died <= 1'b0;
             m_op <= 2'd0; m_a <= 80'd0; m_b <= 80'd0;
         end else case (st)
@@ -217,6 +333,7 @@ module cr_core #(
                         vyf <= 48'sd0; grounded <= cmd_arg[14];
                         cam <= clamp_cam(put_cam);
                     end
+                    OP_SEED: lfsr <= cmd_arg == 16'd0 ? 16'hACE1 : cmd_arg;
                     default: ;
                 endcase
             end else if (tick_pend) begin
@@ -244,7 +361,25 @@ module cr_core #(
             for (k = 1; k < 3; k = k + 1) begin
                 ex_x[k] <= 0; ex_y[k] <= 0; ex_w[k] <= 0; ex_h[k] <= 0;
             end
-            st <= died ? S_END : S_IDLE;
+            ai <= 7'd0; slots <= 3'd0; contacts <= 64'd0;
+            n_ents <= TEST_MODE == 1 ? 7'd0 : stage == 2'd1 ? CR_ENT_COUNT1 : stage == 2'd2 ? CR_ENT_COUNT2 : CR_ENT_COUNT3;
+            st <= S_R_ENT;
+        end
+        S_R_ENT: begin                   // new animals, each drawing its skin from the shared generator
+            if (ai == (stage == 2'd1 ? CR_ENT_COUNT1 : stage == 2'd2 ? CR_ENT_COUNT2 : CR_ENT_COUNT3)) begin
+                st <= died ? S_END : S_IDLE;
+            end else begin
+                lfsr <= lfsr_next;
+                e_skin[ai[5:0]] <= skin_prod[18:16];
+                e_x[ai[5:0]] <= ent_x0; e_y[ai[5:0]] <= ent_y0; e_vy[ai[5:0]] <= 0; e_dl[ai[5:0]] <= 1'b1;
+                e_active[ai] <= ent_active0; e_alive[ai] <= 1'b1;
+                e_exp[ai[5:0]] <= ent_motion == POP ? 7'd0 : 7'd120;
+                e_phase[ai[5:0]] <= 10'd0; e_wl[ai[5:0]] <= 4'd0; e_marks[ai[5:0]] <= 9'd0;
+                if (ent_leader1 != 6'd0) begin
+                    e_slot[ai[5:0]] <= slots; p_w[slots] <= 6'd0; p_cnt[slots] <= 6'd0; slots <= slots + 3'd1;
+                end
+                ai <= ai + 7'd1;
+            end
         end
 
         // ---------------- one step (cr_model.step) ----------------
@@ -308,7 +443,123 @@ module cr_core #(
             if (found) begin died <= 1'b1; st <= S_RESTART; end
             else st <= S_REST;
         end
-        S_REST: st <= S_END;             // animals, reporter, objects, doors: Tasks 8 and 9
+        S_REST: begin                    // reporter, objects: Task 9. Then the animals.
+            ai <= 7'd0; contacts_new <= 64'd0; st <= S_A0;
+        end
+
+        // ---------------- animals (cr_model.animals / update_animal), one at a time in list order ----------
+        S_A0: begin
+            if (ai == n_ents) begin
+                contacts <= contacts_new;
+                st <= S_END;             // near-finish and door checks: Task 9
+            end else if (!e_alive[ai]) ai <= ai + 7'd1;
+            else begin
+                wx <= e_x[ai[5:0]]; wy <= e_y[ai[5:0]]; wvy <= e_vy[ai[5:0]]; wdl <= e_dl[ai[5:0]];
+                wexp <= e_exp[ai[5:0]]; wphase <= e_phase[ai[5:0]]; wwl <= e_wl[ai[5:0]];
+                wmarks <= e_marks[ai[5:0]]; walive <= 1'b1;
+                wact <= e_active[ai] || wakes;
+                st <= (e_active[ai] || wakes) ? S_A1 : S_AW;
+            end
+        end
+        S_A1: begin                      // a follower replays its leader 60 steps late
+            if (ent_leader1 != 6'd0) begin
+                p_x[{fslot, fw}] <= e_x[lead]; p_y[{fslot, fw}] <= e_y[lead]; p_d[{fslot, fw}] <= e_dl[lead];
+                p_w[fslot] <= fw + 6'd1; p_cnt[fslot] <= fcnt_new;
+                if (fcnt_new == 6'd61) begin
+                    wx <= p_x[f_old]; wy <= p_y[f_old]; wdl <= p_d[f_old];
+                    st <= S_AC;
+                end else st <= S_A2;
+            end else st <= S_A2;
+        end
+        S_A2: begin
+            if (ent_motion == POP) begin
+                wphase <= ph_next; wexp <= ant_exp;
+                wy <= ent_base - CR_Q + $signed({25'd0, ant_exp}) * CR_ANT_STEP;
+                st <= S_AC;
+            end else if (wwl != 4'd0) begin          // sinking
+                wy <= wy - CR_SINK_WATER;
+                walive <= wy - CR_SINK_WATER + CR_ANIMAL_H > $signed({28'd0, wwl}) * CR_Q;
+                st <= S_AC;
+            end else begin
+                wold <= wx;
+                wx <= wdl ? wx - CR_ENEMY : wx + CR_ENEMY;
+                st <= S_A3;
+            end
+        end
+        S_A3: begin                      // on a mark, take the float game's side of it (cr_assets.edge_bits)
+            if (on_half) begin
+                wseen <= edge_q ? (on_whole ? wx - 32'sd1 : wdl ? wx - 32'sd1 : wx + 32'sd1) : wx;
+                if (wmarks != 9'd511) wmarks <= wmarks + 9'd1;
+            end else wseen <= wx;
+            st <= S_A4;
+        end
+        S_A4: begin
+            sr <= 4'd10; whave <= 1'b0;
+            if (ent_motion == PATROL) begin
+                if (wseen < ent_lo) begin wx <= 2 * ent_lo - wx; wdl <= 1'b0; wseen <= 2 * ent_lo - wx; end
+                else if (wseen > ent_hi) begin wx <= 2 * ent_hi - wx; wdl <= 1'b1; wseen <= 2 * ent_hi - wx; end
+                sc_mode <= SC_PATROL; st <= S_SCAN;
+            end else if (ent_motion == WALK) begin
+                if (wvy == 0) begin sc_mode <= SC_STEP; st <= S_SCAN; end
+                else st <= S_A_FALL;
+            end else st <= S_A9;
+        end
+        S_SCAN: begin                    // rows 10..0 of the animal's column
+            case (sc_mode)
+                SC_PATROL: if (col_ok && a_surf[sr] && adh <= CR_Q && (!whave || adh < wbestd)) begin
+                    wbest <= row_top; wbestd <= adh; whave <= 1'b1;
+                end
+                SC_STEP: if (col_ok && a_surf[sr] && dh > 0 && dh <= CR_Q) begin
+                    wbest <= row_top; whave <= 1'b1;               // the last one found is the lowest
+                end
+                SC_FALL: if (!whave && col_ok && a_solid[sr] && wfold >= row_top && wy <= row_top) begin
+                    wy <= row_top; wvy <= 0; whave <= 1'b1;
+                end
+                default: if (!whave && col_ok && a_water[sr] && row_bot <= wy && wy < row_top) begin
+                    wwl <= sr + 4'd1; whave <= 1'b1;
+                end
+            endcase
+            if (sr != 4'd0) sr <= sr - 4'd1;
+            else case (sc_mode)
+                SC_PATROL: begin
+                    if (whave || (col_ok && a_surf[0] && adh <= CR_Q && (!whave || adh < wbestd)))
+                        wy <= (col_ok && a_surf[0] && adh <= CR_Q && (!whave || adh < wbestd)) ? row_top : wbest;
+                    else begin wx <= wold; wdl <= !wdl; end
+                    st <= S_A9;
+                end
+                SC_STEP: begin
+                    if (col_ok && a_surf[0] && dh > 0 && dh <= CR_Q) wy <= row_top;
+                    else if (whave) wy <= wbest;
+                    st <= S_A_FALL;
+                end
+                SC_FALL: begin sr <= 4'd10; whave <= 1'b0; sc_mode <= SC_WATER; end
+                default: st <= S_A9;
+            endcase
+        end
+        S_A_FALL: begin                  // fall_item(): gravity, then land on the highest top crossed
+            wfold <= wy; wvy <= wvy - CR_WALK_G; wy <= wy + wvy - CR_WALK_G;
+            sr <= 4'd10; whave <= 1'b0; sc_mode <= SC_FALL; st <= S_SCAN;
+        end
+        S_A9: begin
+            if (wseen < CR_KILL_X || wy < CR_KILL_Y) walive <= 1'b0;
+            st <= S_AC;
+        end
+        S_AC: begin                      // touched? (game.py:605-617)
+            wheight <= a_h2[63:33];      // ANIMAL_H * exposure // 120
+            st <= (walive && wact && wexp != 7'd0 && wwl == 4'd0) ? S_AC2 : S_AW;
+        end
+        S_AC2: begin
+            if (xf - CR_HALF_F < a_xf + a_half - CR_TIE_X && xf + CR_HALF_F > a_xf - a_half + CR_TIE_X
+                    && yf < a_bot + (wheight <<< 8) - CR_TIE_F && yf + CR_PH_F > a_bot + CR_TIE_F)
+                contacts_new[ai] <= 1'b1;            // a new contact calls hit(): Task 9
+            st <= S_AW;
+        end
+        S_AW: begin
+            e_x[ai[5:0]] <= wx; e_y[ai[5:0]] <= wy; e_vy[ai[5:0]] <= wvy; e_dl[ai[5:0]] <= wdl;
+            e_exp[ai[5:0]] <= wexp; e_phase[ai[5:0]] <= wphase; e_wl[ai[5:0]] <= wwl;
+            e_marks[ai[5:0]] <= wmarks; e_alive[ai] <= walive; e_active[ai] <= wact;
+            ai <= ai + 7'd1; st <= S_A0;
+        end
         S_END: begin
             step_done <= 1'b1;
             jl <= 1'b0;
