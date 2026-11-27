@@ -3,6 +3,7 @@
 //   2 one skill pulse with one tick (2 steps) casts once: Phase, skill = T_SKILL - 1 after the 2nd step
 //   3 a command arriving while a step runs is kept and applied afterwards
 //   4 a restart (STAGE) finishes within 1000 clocks, far below one tick (1 666 667 clocks)
+//   5 on the WIN screen a jump or a menu press confirms (exit_req), as Space / Enter in the hub wrapper
 `timescale 1ns/1ps
 module cr_tb_ctrl;
     reg clk = 0, rst = 1;
@@ -58,6 +59,22 @@ module cr_tb_ctrl;
         @(negedge clk) dcmd = 0;
         t = 0; while (busy) begin @(negedge clk); t = t + 1; end
         check(t < 1000 && dut.stage == 2, "4: restart finishes fast");
+        // 5
+        command(4'd1, 16'd3);
+        command(4'd2, 16'd495 | (16'd4 << 9) | (16'd1 << 14));      // at the N16 door, x 247.5 m, y 2 m
+        repeat (3) begin @(negedge clk) gtick = 1; @(negedge clk) gtick = 0; idle; end
+        check(dut.mode_r == 3 && !exit_req, "5: WIN screen, not confirmed yet");
+        @(negedge clk) begin gtick = 1; ej = 1; end
+        @(negedge clk) begin gtick = 0; ej = 0; end
+        idle;
+        check(exit_req, "5: jump press confirms the WIN screen");
+        command(4'd1, 16'd3);
+        command(4'd2, 16'd495 | (16'd4 << 9) | (16'd1 << 14));
+        repeat (3) begin @(negedge clk) gtick = 1; @(negedge clk) gtick = 0; idle; end
+        @(negedge clk) begin gtick = 1; em = 1; end
+        @(negedge clk) begin gtick = 0; em = 0; end
+        idle;
+        check(exit_req && dut.mode_r == 3, "5: menu press confirms on the WIN screen");
         $display("CR_TB_CTRL: %s (%0d failed; restart took %0d clocks)", bad ? "FAIL" : "PASS", bad, t);
         $finish;
     end

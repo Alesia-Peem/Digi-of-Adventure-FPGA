@@ -57,10 +57,10 @@ Demo-menu "jump to Stage 3, win" = STAGE 3, then the top drives the WIN screen t
 
 ### 1.3 Exit
 
-`exit_req` goes high after op WIN on the WIN screen and stays high until the next restart. **Open point for
-this branch:** the hub wrapper also confirms on Space/Up/Enter (`WRAP:105-118`); `cr_core` does not yet take
-BTNU/BTND as confirm on the WIN screen. I will add it (model + core + test) — until then the top can use
-`on3 && cr_mode == 3 && (ev_u || ev_d)` to send op WIN.
+`exit_req` goes high on the WIN screen and stays high until the next restart. Like the hub wrapper
+(`stage3_demo.py` `poll()` / `update()`): a BTNU (jump) press, or a BTND (menu) press made while the WIN screen
+is already up, confirms after that tick's steps; op WIN does the same from the demo menu. The top only needs
+`s3_exit = on3 && cr_exit` (rising edge). Test: `tb/cr_tb_ctrl.v` case 5.
 
 ### 1.4 7-segment and LEDs (proposal, nothing in Pygame to match)
 

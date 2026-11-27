@@ -210,12 +210,15 @@ class Run:
 
     def _step(self, axis, jump, skill, menu):
         g, m = self.g, self.m
+        confirm = jump or (menu and m.mode == M.WIN)
         if menu:
             if g.mode in ("play", "pause"):
                 g.mode = "pause" if g.mode == "play" else "play"
             m.pause_toggle()
         g.step(C.TICK, axis, jump, skill)
         m.step(axis, jump, skill)
+        if confirm and m.mode == M.WIN:
+            m.confirm()
         self.check()
         self.trace.append(m.snapshot())
         self.t += 1
@@ -511,9 +514,12 @@ class PhysRun:
 
     def step(self, axis=0, jump=False, skill=False, menu=False):
         self.words.append((axis < 0) | (axis > 0) << 1 | bool(jump) << 2 | bool(skill) << 3 | bool(menu) << 4)
+        confirm = jump or (menu and self.m.mode == M.WIN)
         if menu:
             self.m.pause_toggle()
         self.m.step(axis, jump, skill)
+        if confirm and self.m.mode == M.WIN:
+            self.m.confirm()
         self.trace.append(self.m.snapshot())
 
 
@@ -750,9 +756,12 @@ def replay(words, test_mode=0):
             elif op == OP_GOLD:
                 m.gold = True
             continue
+        confirm = bool(w >> 2 & 1) or (bool(w >> 4 & 1) and m.mode == M.WIN)    # the wrapper's poll()
         if w >> 4 & 1:
             m.pause_toggle()
         m.step((w >> 1 & 1) - (w & 1), bool(w >> 2 & 1), bool(w >> 3 & 1))
+        if confirm and m.mode == M.WIN:                                         # the wrapper's update()
+            m.confirm()
         trace.append(m.snapshot())
     return trace
 

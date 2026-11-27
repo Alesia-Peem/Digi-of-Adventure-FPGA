@@ -18,6 +18,8 @@
 //   3 SEED   random generator state = arg (0 means 0xACE1)    4 WIN  confirm on the win screen (exit_req)
 //   5 GOLD   the milk tea's power without the tea
 // enter starts a new game at level 1 and cancels presses arriving with it (a button held into the stage).
+// WIN screen (stage3_demo.py poll/update): a jump press, or a menu press made while the WIN screen is already
+// up, confirms after the tick's steps -> exit_req.
 // A command, enter or gtick arriving while busy is kept and handled when the core is free (commands first),
 // so no press is lost; presses that arrive before a waiting tick is handled join that tick.
 `timescale 1ns/1ps
@@ -88,7 +90,7 @@ module cr_core #(
     reg [7:0]  retreat, clear_left;
     reg [5:0]  flash;
     reg [8:0]  grow;
-    reg        used, chase, near, gold, opened, exit_r, sl;
+    reg        used, chase, near, gold, opened, exit_r, sl, tick_jump, conf_menu;
     reg [3:0]  q0, q1;
     reg [6:0]  prog;
     reg        tea_on;
@@ -499,6 +501,7 @@ module cr_core #(
                     mode_r <= mode_r == PLAY ? PAUSE : PLAY;
                 ax <= (btn_right ? 2'sd1 : 2'sd0) - (btn_left ? 2'sd1 : 2'sd0);
                 jl <= jump_pend; sl <= skill_pend;
+                tick_jump <= jump_pend; conf_menu <= menu_pend && mode_r == WIN;
                 steps_left <= STEPS_PER_TICK;
                 st <= S_STEP;
             end
@@ -953,7 +956,10 @@ module cr_core #(
             step_done <= 1'b1;
             jl <= 1'b0;
             if (steps_left > 3'd1) begin steps_left <= steps_left - 3'd1; st <= S_STEP; end
-            else st <= S_IDLE;
+            else begin
+                if (mode_r == WIN && (tick_jump || conf_menu)) exit_r <= 1'b1;
+                st <= S_IDLE;
+            end
         end
 
         // ---------------- try_jump() ----------------
