@@ -342,6 +342,28 @@ def test_random_full_game():
           (steps, worst, ties, sorted(k for k in seen if not k.startswith(("mode", "message")))))
 
 
+def test_footprint_expiry_table():
+    """a print made at step t0 disappears once the game's float time is more than 2 s later"""
+    T = [0.0]
+    for _ in range(14500):
+        T.append(T[-1] + 1 / 120)
+    for t0 in range(0, 14400, 7):
+        for d in (239, 240, 241):
+            if t0 + d <= 14400:
+                assert M.print_expired(t0, t0 + d) == (T[t0 + d] - T[t0] > 2), (t0, d)
+
+
+def test_footprints_follow_the_game():
+    col = find(1, flat(12))
+    r = H.Run(1).put(col + .5, surface(1, col)).hold(200, 1)    # walking: boot prints, then they fade after 2 s
+    assert len(r.m.prints) > 5, "walking left no prints"
+    r.hold(300)
+    done(r)
+    assert not [p for p in r.m.prints if p[3] == M.BOOT], "the boot prints did not fade"
+    seen = H.Run(2).hold(2000, 1)                      # walkers and patrols leave paw prints
+    done(seen)
+
+
 # ---------------- scenarios (also the RTL stimulus) ----------------
 def test_routes_clear_every_level():
     for stage in (1, 2, 3):

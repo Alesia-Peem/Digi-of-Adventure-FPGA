@@ -127,6 +127,7 @@ MESSAGES = {
     "Almost at CB2! Keep pushing!": 12, "Graduation Ceremony is right ahead! Hang in there!": 13,
     "Hit the ? block, then collect the milk tea.": 14}
 MODES = {"play": M.PLAY, "pause": M.PAUSE, "clear": M.CLEAR, "win": M.WIN}
+KINDS = {"snail": 0, "squirrel": 1, "ant": 2, "goose": 3, "boot": 4}
 
 
 def full_state(g):
@@ -140,8 +141,14 @@ def full_state(g):
              tea=g.tea is not None, near=bool(g.near_finish_seen), seconds=max(0, ceil(g.remaining)),
              progress=g.progress, contacts=sorted(g.contacts), alive=[e.alive for e in g.enemies],
              clearing=g.mode == "clear", question=g.question_index if g.interview else 0,
-             questions=[C.QUESTIONS.index(q) for q in g.questions], grown=g.time < g.tea_growth_until)
+             questions=[C.QUESTIONS.index(q) for q in g.questions], grown=g.time < g.tea_growth_until,
+             prints=[(round(t * 120), KINDS[k], d, s) for _, _, t, k, d, s in g.prints],
+             steps={(-1 if w == "player" else w): sd for w, (_, sd) in g.last_steps.items()})
     pos = {"player x": p.x, "player y": p.y}
+    for i, (x, y, *_) in enumerate(g.prints):
+        pos.update({"print %d x" % i: x, "print %d y" % i: y})
+    for w, (last, _) in g.last_steps.items():
+        pos["last step %s" % w] = last
     if g.tea:
         pos.update({"tea x": g.tea.x, "tea y": g.tea.y})
     for i, lift in enumerate(g.lifts):
@@ -162,8 +169,14 @@ def full_state_model(m):
              message=m.message, notice=m.notice > 0, gold=m.gold, opened=m.opened,
              tea=m.tea is not None, near=m.near, seconds=m.seconds, progress=m.progress,
              contacts=sorted(m.contacts), alive=[e.alive for e in m.ents], clearing=m.mode == M.CLEAR,
-             question=m.question_index if m.interview else 0, questions=list(m.questions), grown=m.grow > 0)
+             question=m.question_index if m.interview else 0, questions=list(m.questions), grown=m.grow > 0,
+             prints=[(t, k, d, s) for _, _, t, k, d, s in m.prints],
+             steps={w: sd for w, (_, sd) in m.last_steps.items()})
     pos = {"player x": m.x_units() / M.Q, "player y": m.y_units() / M.Q}
+    for i, (x, y, *_) in enumerate(m.prints):
+        pos.update({"print %d x" % i: x / M.Q, "print %d y" % i: y / M.Q})
+    for w, (last, _) in m.last_steps.items():
+        pos["last step %s" % ("player" if w == -1 else w)] = last / M.Q
     if m.tea:
         pos.update({"tea x": m.tea[0] / M.Q, "tea y": m.tea[1] / M.Q})
     for i, lift in enumerate(m.lifts):
@@ -616,7 +629,8 @@ def _phys():
 
 
 PHYS_COLS = M.Model.HEADER[:17]                       # mode .. time_left
-ANIMAL_COLS = PHYS_COLS + ("lfsr", "ent_x", "ent_y", "ent_active", "ent_alive", "ent_exposure", "contacts")
+ANIMAL_COLS = PHYS_COLS + ("lfsr", "ent_x", "ent_y", "ent_active", "ent_alive", "ent_exposure", "contacts",
+                           "prints_n", "prints_x", "prints_y", "prints_meta")
 
 
 def animal_model():

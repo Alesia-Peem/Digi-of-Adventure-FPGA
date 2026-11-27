@@ -15,6 +15,7 @@ rtl/stage3/cr_consts.vh. Level index 0..2 = stage 1..3.
                        sprite's own see-through-ness), stored facing right as drawn
   cr_stab              per sprite {width, height[7:0], offset[23:0]}
   cr_edge              addr pattern*512+k, 1 bit: edge_bits() of the animals (ent field "edge" = pattern)
+  cr_fpexp             addr t0 (step a footprint was made), 1 bit: does it expire at exactly 240 steps
 Tiles are hard-edged at alpha 128 (decision D2); sprites keep their alpha in the palette.
 """
 import os
@@ -380,6 +381,8 @@ def memories():
     out["tiles"], out["tpal"] = (4, tiles), (12, tpal)
     out["ent"] = (sum(w for _, w in ENT_FIELDS), ent)
     out["spr"], out["spal"], out["stab"] = (4, spr), (16, spal), (43, stab)
+    import cr_model as M
+    out["fpexp"] = (1, [int(b) for b in M.EXPIRE_240] + [0] * (16384 - len(M.EXPIRE_240)))
     return out
 
 
@@ -477,7 +480,8 @@ def model_consts():
                   TEA_Y0=M.PUZZLE_Y + Q, GAP=M.GAP, GAP_STILL=M.GAP_STILL, NEAR_PLAYER=M.NEAR_PLAYER,
                   RETREAT_STEP=M.RETREAT_STEP, FEET=M.FEET, TOL_Y=M.TOL_Y, TOL_X=M.TOL_X, HALF_W=M.HALF_W,
                   PH=M.PH, HIT_AHEAD=13 * Q // 10, TRAIL_DX=Q // 5, TRAIL_DY=7 * Q // 20, TEN_Q=10 * Q,
-                  ELEVEN_Q=11 * Q, TWELVE_Q=12 * Q, TWO_Q=2 * Q, THREE_Q=3 * Q)
+                  ELEVEN_Q=11 * Q, TWELVE_Q=12 * Q, TWO_Q=2 * Q, THREE_Q=3 * Q,
+                  STEP_BOOT=M.STEP_BOOT, STEP_PAW=M.STEP_PAW)
     assert M.LIFT_LOW <= 4 * Q <= M.LIFT_HIGH and 13 * Q % 10 == 0
     timers = dict(COYOTE=M.COYOTE, BUFFER=M.BUFFER, DOUBLE_STEPS=M.DOUBLE_STEPS, DOUBLE_LAST=M.DOUBLE_LAST,
                   T_LIMIT=M.T_LIMIT, T_NOTICE=M.T_NOTICE, T_FLASH=M.T_FLASH, T_PROTECT=M.T_PROTECT,

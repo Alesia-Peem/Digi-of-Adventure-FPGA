@@ -5,7 +5,8 @@
 // the extra boxes (the stage-2 "?" box), deaths (fall, water, time-out), restart, pause, the commands STAGE and
 // PUT (Task 7); the animals - patrol, follower, walk + water, fly, pop - and their contact test (Task 8); the
 // reporter (chase, interview, cloak follow, retreat), the skills Cloak and Phase, the lifts, the "?" box and
-// the milk tea, the doors, level clear / win, near-finish message, progress, commands SEED / WIN / GOLD (Task 9).
+// the milk tea, the doors, level clear / win, near-finish message, progress, commands SEED / WIN / GOLD (Task 9);
+// footprints of the player and of walking / patrolling animals, up to 72, each fading 2 s after it was made.
 //
 // Numbers (cr_model.py): 1 m = Q = 600*4096 units; player x / y / speeds / gravity carry 8 more fraction bits
 // ("F units"). The grid is visited in the game's list order - rows top to bottom, columns left to right, then
@@ -113,6 +114,25 @@ module cr_core #(
     reg        tr_d [0:511];
     reg [8:0]  tr_tail;
     reg [9:0]  tr_cnt;
+    // footprints (game.py footprint()): a ring of 128 slots holding the newest <= 72 prints
+    reg signed [47:0] fp_x [0:127];
+    reg signed [47:0] fp_y [0:127];
+    reg [13:0] fp_t [0:127];             // step the print was made (now)
+    reg [2:0]  fp_k [0:127];             // species 0..3, boot 4
+    reg        fp_dl [0:127];            // direction -1
+    reg        fp_sn [0:127];            // side -1
+    reg [6:0]  fp_head, fp_cnt;
+    reg [64:0] ls_v;                     // last step known, per walker (0..63 animals, 64 the player)
+    reg signed [47:0] ls_x [0:64];
+    reg        ls_sn [0:64];
+    reg [6:0]  fw_who;
+    reg signed [47:0] fw_x, fw_y;
+    reg [2:0]  fw_k;
+    reg        fw_dl, fw_sup;
+    reg        fpexp_rom [0:16383];      // cr_fpexp: does a print made at step t0 expire at exactly 240 steps
+    initial $readmemh({MEM_DIR, "cr_fpexp.mem"}, fpexp_rom);
+    reg        fpexp_q;
+    always @(posedge clk) fpexp_q <= fpexp_rom[fp_t[fp_head]];
     // subroutine working values
     reg signed [47:0] bk_x, bk_y, bk_w, bk_h;              // blocked(): the box, units
     reg signed [47:0] pl_tx, pl_ty, best_s, best_x, best_y, prev_s, prev_x, prev_y, c_s, c_x, c_y;
@@ -190,8 +210,9 @@ module cr_core #(
                S_RT0 = 7'd69, S_RT1 = 7'd70, S_RT2 = 7'd71, S_RT3 = 7'd72, S_RT4 = 7'd73, S_RT5 = 7'd74,
                S_RT6 = 7'd75, S_RT7 = 7'd76, S_RT8 = 7'd77, S_RT9 = 7'd78, S_PL0 = 7'd79, S_PL1 = 7'd80,
                S_PL2 = 7'd81, S_W_USE2 = 7'd82, S_DRAW = 7'd83, S_R_ENT2 = 7'd84, S_H1A = 7'd85, S_H1B = 7'd86,
-               S_W_USE3 = 7'd87, S_W_USE4 = 7'd88, S_ACM = 7'd89;
-    reg [6:0] st, tj_ret, w_ret, m_ret, rs_ret, prog_ret, hit_ret, fo_ret, rq_ret, pl_ret, dr_ret;
+               S_W_USE3 = 7'd87, S_W_USE4 = 7'd88, S_ACM = 7'd89, S_FPP = 7'd90, S_FPP2 = 7'd91, S_FW = 7'd92,
+               S_REST1 = 7'd93, S_AC1 = 7'd94;
+    reg [6:0] st, tj_ret, w_ret, m_ret, rs_ret, prog_ret, hit_ret, fo_ret, rq_ret, pl_ret, dr_ret, fp_ret;
     reg [3:0] dr_n;                      // draw(): shifts left
 
     // this tick's input (the levels are sampled when the tick is handled)
@@ -358,6 +379,13 @@ module cr_core #(
     wire signed [47:0] fx1 = (f_still && CR_GAP - CR_TOL_X <= ahead_r && ahead_r <= CR_GAP_STILL) ? rx : f_x;
     wire signed [47:0] fx2 = (face_l ? fx1 - px_u : px_u - fx1) < CR_GAP ? (face_l ? px_u + CR_GAP : px_u - CR_GAP) : fx1;
     wire signed [47:0] prog_num = 100 * (px_u - spawn_u);
+    // footprint(): the walker's last step and side
+    wire        fw_known = ls_v[fw_who];
+    wire signed [47:0] fw_last = fw_known ? ls_x[fw_who] : fw_x;
+    wire        fw_sn = fw_known ? ls_sn[fw_who] : 1'b0;
+    wire        fw_new = sabs(fw_x - fw_last) >= (fw_k == 3'd4 ? CR_STEP_BOOT : CR_STEP_PAW);
+    wire [6:0]  fp_new = fp_head + fp_cnt;
+    wire signed [47:0] fp_age = $signed({34'd0, now}) - $signed({34'd0, fp_t[fp_head]});
     wire signed [47:0] r_tgt_raw = rdir_l ? rx + CR_RETREAT_STEP : rx - CR_RETREAT_STEP;
 
     // ---------------- arithmetic unit ----------------
@@ -528,6 +556,7 @@ module cr_core #(
             rt_step[0] <= 16'd0; rt_x[0] <= spawn_u; rt_y[0] <= CR_SPAWN_Y * CR_Q; rt_walk[0] <= 1'b0;
             rt_gnd[0] <= 1'b0;
             tr_cnt <= 10'd0; tr_tail <= 9'd0;
+            fp_head <= 7'd0; fp_cnt <= 7'd0; ls_v <= 65'd0;
             ai <= 7'd0; slots <= 3'd0; contacts <= 64'd0;
             n_ents <= TEST_MODE == 1 ? 7'd0 : stage == 2'd1 ? CR_ENT_COUNT1 : stage == 2'd2 ? CR_ENT_COUNT2 : CR_ENT_COUNT3;
             st <= S_R_ENT;
@@ -572,9 +601,30 @@ module cr_core #(
                     died <= 1'b1; rs_msg <= CR_MSG_TIMEUP; rs_ret <= S_END0; st <= S_RESTART;
                 end else begin
                     time_left <= time_left - 14'd1;
-                    st <= S_T2;
+                    st <= S_FPP;
                 end
             end
+        end
+        S_FPP: st <= S_FPP2;             // fpexp_q (block ROM) follows the oldest print one clock late
+        S_FPP2: begin                    // footprints older than 2 s of game time go
+            if (fp_cnt != 7'd0 && (fp_age > 240 || (fp_age == 240 && fpexp_q))) begin
+                fp_head <= fp_head + 7'd1; fp_cnt <= fp_cnt - 7'd1; st <= S_FPP;
+            end else st <= S_T2;
+        end
+        S_FW: begin                      // footprint(who, x, y, kind, direction, supported)
+            if (!fw_sup) ls_v[fw_who] <= 1'b0;
+            else begin
+                if (fw_new) begin
+                    fp_x[fp_new] <= fw_x; fp_y[fp_new] <= fw_y; fp_t[fp_new] <= now; fp_k[fp_new] <= fw_k;
+                    fp_dl[fp_new] <= fw_dl; fp_sn[fp_new] <= fw_sn;
+                    if (fp_cnt == 7'd72) fp_head <= fp_head + 7'd1; else fp_cnt <= fp_cnt + 7'd1;
+                    ls_x[fw_who] <= fw_x; ls_sn[fw_who] <= !fw_sn;
+                end else begin
+                    ls_x[fw_who] <= fw_last; ls_sn[fw_who] <= fw_sn;
+                end
+                ls_v[fw_who] <= 1'b1;
+            end
+            st <= fp_ret;
         end
         S_T2: begin                      // timers; the interview freezes the world; the skill press
             if (notice != 9'd0) notice <= notice - 9'd1;
@@ -662,7 +712,11 @@ module cr_core #(
             end
             else st <= S_REST;
         end
-        S_REST: st <= tea_on ? S_TEA0 : S_ROUTE;
+        S_REST: begin                    // the player's boot prints
+            fw_who <= 7'd64; fw_x <= px_u; fw_y <= py_u; fw_k <= 3'd4; fw_dl <= face_l; fw_sup <= grounded;
+            fp_ret <= S_REST1; st <= S_FW;
+        end
+        S_REST1: st <= tea_on ? S_TEA0 : S_ROUTE;
         S_TEA0: begin                    // the tea slides right and falls onto the blocks
             tea_x <= tea_x + CR_TEA_VX > CR_TEA_STOP ? CR_TEA_STOP : tea_x + CR_TEA_VX;
             tea_old <= tea_y; tea_vy <= tea_vy - CR_TEA_G; tea_y <= tea_y + tea_vy - CR_TEA_G;
@@ -934,7 +988,14 @@ module cr_core #(
             if (wseen < CR_KILL_X || wy < CR_KILL_Y) walive <= 1'b0;
             st <= S_AC;
         end
-        S_AC: begin                      // touched? (game.py:605-617)
+        S_AC: begin                      // walking and patrolling animals leave paw prints
+            if (wact && walive && (ent_motion == WALK || ent_motion == PATROL)) begin
+                fw_who <= ai; fw_x <= {{16{wx[31]}}, wx}; fw_y <= {{16{wy[31]}}, wy}; fw_k <= {1'b0, ent_species};
+                fw_dl <= wdl; fw_sup <= ent_motion == PATROL || wvy == 0;
+                fp_ret <= S_AC1; st <= S_FW;
+            end else st <= S_AC1;
+        end
+        S_AC1: begin                     // touched? (game.py:605-617)
             wh1 <= a_h1;
             st <= (walive && wact && wexp != 7'd0 && wwl == 4'd0) ? S_ACM : S_AW;
         end

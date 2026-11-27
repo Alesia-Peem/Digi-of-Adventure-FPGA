@@ -22,7 +22,7 @@ module cr_tb_cosim;
     reg [1023:0] sf, of;
     integer n, i, fd, steps, worst, t;
     // one line per step, in HEADER order (cr_model.Model.HEADER)
-    reg [31:0] ex, ey, eexp; reg [63:0] eact, ealive; integer j;
+    reg [31:0] ex, ey, eexp, fx, fy, fm; reg [63:0] eact, ealive; integer j, fk;
     integer xbad = 0;
     always @(posedge clk) if (step_done) begin
         // registers that steer the sequencer or index memories must never be unknown (review finding I2)
@@ -49,7 +49,15 @@ module cr_tb_cosim;
         $fwrite(fd, "%0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d ",
             dut.rx, dut.ry, dut.rdir_l ? -1 : 1, dut.rvisible, dut.rwalking, dut.q0, dut.q1,
             (dut.mode_r == 2 || dut.mode_r == 3) ? 100 : dut.prog, dut.near, dut.grow, dut.exit_req);
-        $fdisplay(fd, "%0d %0d %0d %0d %0d %0d %0d", dut.lfsr, ex, ey, eact, ealive, eexp, dut.contacts);
+        fx = 0; fy = 0; fm = 0;
+        for (j = 0; j < dut.fp_cnt; j = j + 1) begin
+            fk = (dut.fp_head + j) % 128;
+            fx = fx + (j + 1) * dut.fp_x[fk];
+            fy = fy + (j + 1) * dut.fp_y[fk];
+            fm = fm + (j + 1) * (dut.fp_t[fk] * 64 + dut.fp_k[fk] * 4 + (dut.fp_dl[fk] ? 0 : 2) + (dut.fp_sn[fk] ? 0 : 1));
+        end
+        $fdisplay(fd, "%0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d", dut.lfsr, ex, ey, eact, ealive, eexp, dut.contacts,
+                  dut.fp_cnt, fx, fy, fm);
         steps = steps + 1;
     end
     initial begin

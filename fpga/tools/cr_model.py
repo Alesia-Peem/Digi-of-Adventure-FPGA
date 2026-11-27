@@ -102,6 +102,28 @@ DOORS = {1: (245 * Q, 2 * Q, 5 * Q, 23 * Q // 10), 2: (607518720, 2 * Q, 3 * Q /
          3: (246 * Q, 2 * Q, 4 * Q, 23 * Q // 10)}
 
 
+# footprints (game.py footprint(), winter_art.tracks): up to 72, a print fades 2 s after it was made
+PRINTS = 72
+STEP_BOOT, STEP_PAW = 1351680, 1179648             # 0.55 m and 0.48 m
+BOOT = 4                                           # print kind: species 0..3, the player's boot 4
+
+
+def _expiry_at_240():
+    """game.py drops a print when time - t0 > 2 with float times summed step by step from 0: at exactly 240
+    steps apart the answer depends on t0 (float rounding). One bit per t0: the hardware's cr_fpexp.mem."""
+    T = [0.0]
+    for _ in range(14400 + 241):
+        T.append(T[-1] + DT)
+    return [T[t0 + 240] - T[t0] > 2 for t0 in range(14400 + 1)]
+
+
+EXPIRE_240 = _expiry_at_240()
+
+
+def print_expired(t0, now):
+    return now - t0 > 240 or (now - t0 == 240 and EXPIRE_240[t0])
+
+
 class Lfsr16:
     """fpga/rtl/common/lfsr16.v. A draw advances it 16 times so consecutive draws share no bits."""
 
@@ -192,6 +214,8 @@ class Model:
         self.route = deque([(0, sx * Q, sy * Q, 1, False, False)])   # (step, x, y, dir, walking, grounded)
         self.trail = deque(maxlen=TRAIL)
         self.now = 0                                                  # steps since the restart
+        self.prints = deque(maxlen=PRINTS)                            # (x, y, step, kind, direction, side)
+        self.last_steps = {}                                          # who (-1 player, animal index) -> (x, side)
         self.notify(message)
 
     def notify(self, message):
@@ -232,7 +256,8 @@ class Model:
               "facing", "walking", "cam", "stride", "time_left", "skill", "used", "chase", "interview", "protection",
               "follow", "retreat", "flash", "notice", "message", "gold", "opened", "tea_on", "tea_x", "tea_y",
               "lift0", "lift1", "rep_x", "rep_y", "rep_dir", "rep_visible", "rep_walking", "q0", "q1", "progress",
-              "near", "grow", "exit", "lfsr", "ent_x", "ent_y", "ent_active", "ent_alive", "ent_exposure", "contacts")
+              "near", "grow", "exit", "lfsr", "ent_x", "ent_y", "ent_active", "ent_alive", "ent_exposure", "contacts",
+              "prints_n", "prints_x", "prints_y", "prints_meta")
 
     def snapshot(self):
         """every value cr_core.v must reproduce after each step, in HEADER order"""
@@ -253,7 +278,16 @@ class Model:
                 int(self.tea is not None), tea[0], tea[1], lifts[0], lifts[1], self.rx, self.ry, self.rdir,
                 int(self.rvisible), int(self.rwalking), q[0], q[1], self.progress, int(self.near), self.grow,
                 int(self.exit_req), self.rng.q, ex, ey, active, alive, exposure,
-                sum(1 << i for i in self.contacts))
+                sum(1 << i for i in self.contacts)) + self.print_sums()
+
+    def print_sums(self):
+        """footprints as 4 numbers (modulo 2^32, weighted by position in the list)"""
+        n, sx, sy, meta = len(self.prints), 0, 0, 0
+        for k, (x, y, t, kind, d, side) in enumerate(self.prints):
+            sx = (sx + (k + 1) * x) & 0xFFFFFFFF
+            sy = (sy + (k + 1) * y) & 0xFFFFFFFF
+            meta = (meta + (k + 1) * (t * 64 + kind * 4 + (d > 0) * 2 + (side > 0))) & 0xFFFFFFFF
+        return n, sx, sy, meta
 
     def teleport(self, x, y, grounded):
         self.xf, self.yf, self.vyf, self.grounded = x * F, y * F, 0, grounded
@@ -456,6 +490,8 @@ class Model:
             if not e.alive:
                 continue
             self.update_animal(e)
+            if e.active and e.alive and e.motion in (WALK, PATROL):
+                self.footprint(i, e.x, e.y, e.species, e.direction, e.motion == PATROL or e.vy == 0)
             if not e.alive or not e.active or not e.exposure or e.waterline is not None:
                 continue
             half = (HALF_GOOSE if e.species == 3 else HALF_OTHER) * F
@@ -469,6 +505,17 @@ class Model:
                 if i not in self.contacts:
                     self.hit()
         self.contacts = contacts
+
+    def footprint(self, who, x, y, kind, direction, supported):
+        """game.py footprint(): a print every 0.55 m (boot) / 0.48 m (paws), alternating sides"""
+        if not supported:
+            self.last_steps.pop(who, None)
+            return
+        last, side = self.last_steps.get(who, (x, 1))
+        if abs(x - last) >= (STEP_BOOT if kind == BOOT else STEP_PAW):
+            self.prints.append((x, y, self.now, kind, direction, side))
+            last, side = x, -side
+        self.last_steps[who] = (last, side)
 
     def untouchable(self):
         return self.stage == 3 and self.skill > 0  # Phase
@@ -651,6 +698,8 @@ class Model:
         if self.mode != PLAY:
             return
         self.now += 1
+        while self.prints and print_expired(self.prints[0][2], self.now):
+            self.prints.popleft()
         self.grow = max(self.grow - 1, 0)
         self.time_left -= 1
         if self.time_left <= 0:
@@ -677,6 +726,7 @@ class Model:
             self.restart(MSG_FELL if self.stage == 3 else MSG_SPLASH)
             self.died = True
             return
+        self.footprint(-1, self.px, self.yf >> VF, BOOT, self.facing, self.grounded)
         if self.tea:
             self.move_tea()
         self.record_route(abs(self.xf - last_x) > TIE_X)
