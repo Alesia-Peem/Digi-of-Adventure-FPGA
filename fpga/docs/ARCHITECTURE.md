@@ -104,7 +104,8 @@ L+58, from registered `L·zoom_inv` / `cam_y+L`), the source column goes to `rd_
 pipeline on hcount (hcount holds 4 clk per pixel). `bg_mode`, camera and zoom are latched once per frame, one
 pixel after `frame_end`, so a game tick in the middle of a frame cannot tear the background or desynchronise
 the row requests. `stage_mgr` loads the room (`pic_load`, vblank) on every Stage 1 / Stage 2 entry.
-Flash missing: the `pic_stream` stripes show through and the game keeps running.
+Flash missing (header not "CPEP" + `PIC_COUNT`): the `pic_stream` stripes show through, LD16 lights red and
+the game keeps running; every `pic_load` re-reads the header and clears `missing` once it is valid.
 
 Big pictures (rooms, cutscenes, endings) live in the QSPI flash at `PIC_BASE` = 0x400000 (`tools/pic_pack.py`:
 "CPEP" header, per picture a 256 × 12-bit palette + w × h index bytes). `pic_stream.v` loads the palette on
@@ -120,6 +121,10 @@ then faded: channel → ⌊c · fade / 16⌋ (fade 0..16) before the display lis
 output. Under `` `ifdef SIMULATION `` (all Icarus runs, `run_tests.sh` passes `-DSIMULATION`; Vivado never
 defines it) the module is behavioural and exposes the flash clock on `sim_sck`, which testbenches connect to
 `tb/flash_model.v` (`dut.u_qio.sim_sck`); in synthesis `sim_sck` = 0 and is left unconnected.
+`qspi_io` also brings out `STARTUPE2.EOS` (1 under `SIMULATION`): `qspi_reader` synchronises it and starts
+its CS#-high start-up clocks only after it has been 1 for 256 clk, because `USRCCLKO` does not reach the pin
+before the end of startup. DQ is sampled through an input flip-flop marked `IOB = "TRUE"`; the capture
+strobe is delayed one clk so the pad sample moment (`LATE_SAMPLE`) is unchanged.
 
 **Screen sequence (`rtl/top/stage_mgr.v`).** `BOOT → OPEN → S1 → C12 → S2 → C23 → S3 → END → OPEN`. Stages
 leave with their `exit_req` (Stage 3: BTNC on the WIN screen, taken by the top from `C3_WIN`); the picture

@@ -9,6 +9,7 @@
 //       - fewer than 8 SCK cycles with CS# high before the first command (STARTUPE2 quirk, see qspi_reader)
 //       - command other than 0x6B
 //       - DQ2/DQ3 (WP#/HOLD#) not high while command/address bits are clocked in
+//       - the hex file is shorter than SIZE (stale mem/pictures.hex; SIZE = PIC_BYTES of pic_map.vh)
 //   `drive` is 1 while the model drives DQ (the testbench uses it to detect bus contention).
 `timescale 1ns/1ps
 module flash_model #(
@@ -35,6 +36,14 @@ module flash_model #(
     end
 
     integer errors = 0;
+    // a hex file shorter than SIZE leaves the tail undefined (stale mem/pictures.hex vs pic_map.vh)
+    initial begin
+        #1;
+        if (^mem[SIZE-1] === 1'bx) begin
+            errors = errors + 1;
+            $display("FLASH: %0s has fewer than SIZE = %0d bytes (stale? rerun tools/pic_pack.py)", fname, SIZE);
+        end
+    end
     integer pre_rise = 0;         // SCK rising edges with CS# high before the first command
     integer nrise = 0;            // SCK rising edges since CS# went low
     integer ncmd = 0;

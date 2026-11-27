@@ -103,6 +103,11 @@ set_false_path -from [get_ports {BTNC BTNU BTNL BTNR BTND CPU_RESETN SW[*]}]
 
 ## Quad SPI Flash (picture streamer pic_stream.v). The clock has no pin: it goes through STARTUPE2.USRCCLKO.
 ## Ports of cpe_escape_top (DQ through IOBUFs in qspi_io.v).
+## Read timing: qspi_reader.v registers DQ every clk in a flip-flop marked (* IOB = "TRUE" *) in the RTL, so
+## the pad -> flip-flop path is the fixed IOB input path; the sample moment (LATE_SAMPLE = 1: ~20 ns after the
+## SCK falling edge is issued) is unchanged. No set_input_delay: SCK leaves through STARTUPE2 (no clock pin to
+## reference). After implementation check that the 4 dq_iob flip-flops were really packed into the IOBs
+## (report_io / the "IOB" column of the placed design) - not verified, Vivado has not been run.
 set_property -dict { PACKAGE_PIN K17   IOSTANDARD LVCMOS33 } [get_ports { QSPI_DQ[0] }]; #IO_L1P_T0_D00_MOSI_14 Sch=qspi_dq[0]
 set_property -dict { PACKAGE_PIN K18   IOSTANDARD LVCMOS33 } [get_ports { QSPI_DQ[1] }]; #IO_L1N_T0_D01_DIN_14 Sch=qspi_dq[1]
 set_property -dict { PACKAGE_PIN L14   IOSTANDARD LVCMOS33 } [get_ports { QSPI_DQ[2] }]; #IO_L2P_T0_D02_14 Sch=qspi_dq[2]

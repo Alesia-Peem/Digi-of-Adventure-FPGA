@@ -9,15 +9,24 @@
 //     * line budget: cycles row_req -> busy low < 3200 (prints the measured worst case + margin)
 //     * pixels -> sim/frames/pic_<NAME>.ppm (P3, maxval 15, "# rows ..." lists the rows dumped);
 //       fpga/tools/pic_check.py compares them with mem/preview/pic_<NAME>.png
-//   +ZERO run (flash all zeros): missing = 1 within 1 ms of reset, pic_load ignored, rd_rgb = stripes
+//   +ZERO run (flash all zeros): missing = 1 within 1 ms of reset, row_req never reads the flash, rd_rgb =
+//     stripes; a pic_load while missing re-reads the header (still missing for zeros and for "CPEP" with a
+//     wrong picture count); after the real image is written into the model, a pic_load clears `missing`
+//     and the picture streams correctly
+//   both runs: CS# is 1 from time 0 (initial value, before reset); no SCK edge before the configuration
+//     end-of-startup (cfg_eos, held low for the first EOS_LOW clk) and >= 100 clk of cfg_eos = 1 before the
+//     first SCK edge; qspi_reader samples DQ through a register (dut.u_qr.dq_iob = dq_i one clk earlier)
 // Prints "TB_PIC_STREAM: PASS" or the failing checks.
 `timescale 1ns/1ps
 module tb_pic_stream #(parameter integer LATE = 1);   // qspi_reader LATE_SAMPLE (run_tests runs both)
 `include "pic_map.vh"
     localparam integer LINE = 3200;                  // 800 px x 4 clk at 100 MHz
-    localparam integer FLASH_BYTES = 5077760;        // size of mem/pictures.hex
+    localparam integer FLASH_BYTES = PIC_BYTES;      // size of mem/pictures.hex (pic_map.vh)
+    localparam integer EOS_LOW = 3000;               // clk after reset release with cfg_eos = 0
 
     reg clk = 1'b0, rst = 1'b1;
+    reg cfg_eos = 1'b0;
+    initial begin repeat (5 + EOS_LOW) @(posedge clk); cfg_eos <= 1'b1; end   // STARTUPE2.EOS stand-in
     always #5 clk = ~clk;
 
     reg  [4:0]  pic_id = 5'd0;
@@ -35,8 +44,8 @@ module tb_pic_stream #(parameter integer LATE = 1);   // qspi_reader LATE_SAMPLE
     assign dq[3] = dq_oe[3] ? dq_o[3] : 1'bz;
     assign dq_i = dq;
 
-    pic_stream #(.PIC_BASE(PIC_BASE), .LATE_SAMPLE(LATE)) dut (
-        .clk(clk), .rst(rst), .pic_id(pic_id), .pic_load(pic_load), .row_req(row_req), .src_row(src_row),
+    pic_stream #(.PIC_BASE(PIC_BASE), .PIC_COUNT(PIC_COUNT), .LATE_SAMPLE(LATE)) dut (
+        .clk(clk), .rst(rst), .cfg_eos(cfg_eos), .pic_id(pic_id), .pic_load(pic_load), .row_req(row_req), .src_row(src_row),
         .rd_x(rd_x), .rd_rgb(rd_rgb), .busy(busy), .missing(missing),
         .qspi_csn(qspi_csn), .qspi_sck(qspi_sck), .qspi_dq_i(dq_i), .qspi_dq_o(dq_o), .qspi_dq_oe(dq_oe));
     flash_model #(.BASE(PIC_BASE), .SIZE(FLASH_BYTES)) fm (.csn(qspi_csn), .sck(qspi_sck), .dq(dq));
@@ -58,6 +67,27 @@ module tb_pic_stream #(parameter integer LATE = 1);   // qspi_reader LATE_SAMPLE
     task fail(input [8*80-1:0] msg);
         begin errors = errors + 1; if (errors < 30) $display("FAIL: %0s", msg); end
     endtask
+
+    // CS# high from time 0 (FPGA power-up value), before any reset
+    initial begin #1; if (qspi_csn !== 1'b1) fail("qspi_csn is not 1 before reset (initial value)"); end
+    // start-up clocks only after STARTUPE2.EOS: no SCK edge while cfg_eos = 0, and cfg_eos = 1 for >= 100 clk
+    integer t_eos = -1, t_sck1 = -1, n_sck_noeos = 0;
+    reg sck_d = 1'b0;
+    always @(posedge clk) begin
+        sck_d <= qspi_sck;
+        if (cfg_eos && t_eos < 0) t_eos = cyc;
+        if (qspi_sck !== sck_d) begin
+            if (!cfg_eos) n_sck_noeos = n_sck_noeos + 1;
+            if (t_sck1 < 0) t_sck1 = cyc;
+        end
+    end
+    // DQ is sampled through a register (IOB flip-flop): dq_iob = dq_i of the previous clk
+    reg [3:0] dq_i_d = 4'h0;
+    integer n_iob = 0;
+    always @(posedge clk) begin
+        dq_i_d <= dq_i;
+        if (cyc > 2 && dut.u_qr.dq_iob !== dq_i_d) n_iob = n_iob + 1;
+    end
 
     function [7:0] fbyte(input integer a);   // byte at PIC_BASE + a in the flash model
         fbyte = fm.mem[a];
@@ -229,10 +259,7 @@ module tb_pic_stream #(parameter integer LATE = 1);   // qspi_reader LATE_SAMPLE
             end
             if (t_miss < 0) fail("missing not asserted within 1 ms");
             else $display("missing asserted %0d clk (%0d ns) after reset", t_miss, t_miss * 10);
-            @(posedge clk); pic_load <= 1'b1;
-            @(posedge clk); pic_load <= 1'b0;
-            repeat (3) @(posedge clk);
-            if (busy) fail("busy after pic_load while missing");
+            while (busy) @(posedge clk);
             line(10'd5, 0);
             for (r_shown = 7; r_shown < 40; r_shown = r_shown + 11) begin
                 line(r_shown[9:0], 0);
@@ -240,8 +267,35 @@ module tb_pic_stream #(parameter integer LATE = 1);   // qspi_reader LATE_SAMPLE
                 for (i = 0; i < 700; i = i + 1)
                     if (pix[i] !== stripe(i[9:0], r_shown[9:0])) begin fail("stripe pattern wrong"); i = 700; end
             end
-            if (busy) fail("busy while missing");
-            if (fm.ncmd != 1) fail("flash read again after missing");
+            if (busy) fail("busy while missing (row requests)");
+            if (fm.ncmd != 1) fail("row_req read the flash while missing");
+            // pic_load while missing: header read again, still missing (flash still zero)
+            pulse_load(PIC_TITLE);
+            repeat (2) @(posedge clk);
+            if (!busy) fail("pic_load while missing does not re-check the flash header");
+            while (busy) @(posedge clk);
+            if (fm.ncmd != 2) fail("pic_load while missing: expected exactly one header read");
+            if (!missing) fail("missing cleared with a zero flash");
+            // "CPEP" with a wrong picture count: still missing
+            fm.mem[0] = "C"; fm.mem[1] = "P"; fm.mem[2] = "E"; fm.mem[3] = "P";
+            fm.mem[4] = PIC_COUNT + 1; fm.mem[5] = 8'd0;
+            pulse_load(PIC_TITLE);
+            repeat (2) @(posedge clk);
+            while (busy) @(posedge clk);
+            if (fm.ncmd != 3) fail("pic_load while missing (bad count): expected one header read");
+            if (!missing) fail("magic CPEP with a wrong picture count accepted");
+            // real image now in the flash (e.g. programmed over JTAG while running): pic_load recovers
+            $readmemh("mem/pictures.hex", fm.mem);
+            pulse_load(PIC_TITLE);
+            repeat (2) @(posedge clk);
+            while (busy) @(posedge clk);
+            if (missing) fail("missing not cleared by pic_load after the flash was programmed");
+            line(10'd30, 0);
+            line(10'd31, 640);
+            expect_row(PIC_TITLE, 30, "after recovery: TITLE row 30 wrong");
+            line(10'd31, 640);
+            expect_row(PIC_TITLE, 31, "after recovery: TITLE row 31 wrong");
+            $display("missing: re-checked on pic_load (zero flash, bad count), recovered after programming");
         end else begin
             // ------------------------------------------------------- programmed flash
             if (PIC_BASE != 24'h400000) fail("PIC_BASE changed");
@@ -255,6 +309,11 @@ module tb_pic_stream #(parameter integer LATE = 1);   // qspi_reader LATE_SAMPLE
         end
         if (fm.errors != 0) begin errors = errors + 1; $display("FAIL: %0d flash protocol errors", fm.errors); end
         if (n_cont != 0) begin errors = errors + 1; $display("FAIL: DQ bus contention on %0d cycles", n_cont); end
+        if (n_sck_noeos != 0) begin errors = errors + 1; $display("FAIL: %0d SCK edges before cfg_eos", n_sck_noeos); end
+        if (t_sck1 >= 0 && t_eos >= 0 && t_sck1 - t_eos < 100) begin
+            errors = errors + 1; $display("FAIL: first SCK edge only %0d clk after cfg_eos (need >= 100)", t_sck1 - t_eos);
+        end
+        if (n_iob != 0) begin errors = errors + 1; $display("FAIL: dq_iob != dq_i of the previous clk on %0d clk", n_iob); end
         if (errors == 0) $display("TB_PIC_STREAM: PASS (LATE_SAMPLE=%0d%0s)", LATE, $test$plusargs("ZERO") ? ", flash zero -> missing" : "");
         else $display("TB_PIC_STREAM: FAIL (%0d errors)", errors);
         $finish;

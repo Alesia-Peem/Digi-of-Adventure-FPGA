@@ -4,6 +4,7 @@
 #   ./run_tests.sh quick               # skip the (slow) VGA frame capture
 #   ./run_tests.sh frames12            # sections 1-3, then only the Stage 1 / Stage 2 VGA frame comparisons
 set -e
+set -o pipefail     # a failing generator / simulator in front of `| grep` stops the run too
 cd "$(dirname "$0")"
 ROOT=$(cd .. && pwd)
 mkdir -p sim/build sim/frames
@@ -18,6 +19,9 @@ python3 -I tools/asset_convert.py > /dev/null
 python3 -I tools/stage2_assets.py 2>/dev/null | grep "stage 2"
 python3 -I tools/stage3_assets.py 2>/dev/null | grep "stage 3"
 python3 -I tools/ui_compile.py
+# flash image + pic_map.vh (PIC_BYTES / PIC_COUNT) regenerated every run: a stale mem/pictures.hex cannot be
+# simulated against a newer pic_map.vh (flash_model also reports a hex shorter than PIC_BYTES)
+python3 -I tools/pic_pack.py 2>/dev/null
 
 echo "== 2. puzzle mathematics"
 python3 -I tools/verify_puzzles.py | tail -1
@@ -57,7 +61,6 @@ S2_GEN_TIMEOUT=${S2_GEN_TIMEOUT:-120}   # the Stage 2 trace generator currently 
 # s2_core were ported from) - the new game's scenarios do not exist yet (Phase 2/3). Rooms come from the flash
 # model (real pic_stream chain), so mem/pictures.hex is needed.
 frames12() {
-  [ -f mem/pictures.hex ] || python3 -I tools/pic_pack.py
   (cd "$ROOT" && COSIM_DEMO=demo_py_old python3 -I fpga/tools/cosim_s1.py gen full 2>/dev/null | grep "^scenario")
   python3 -I tools/frame_check.py pick full
   $IVS -o sim/build/tb_frame.vvp rtl/common/*.v rtl/stage1/*.v rtl/video/*.v rtl/ui/ui_composer.v tb/flash_model.v \
@@ -114,7 +117,6 @@ $IVS -o sim/build/top.vvp rtl/common/*.v rtl/video/*.v rtl/ui/*.v rtl/stage1/*.v
 echo "top: elaborated"     # separate line: a failing compile stops the run (set -e)
 
 echo "== 8. QSPI picture streamer: pic_stream + qspi_reader vs the S25FL128S model (pixel exact vs previews)"
-[ -f mem/pictures.hex ] || python3 -I tools/pic_pack.py
 for late in 1 0; do
   $IV -I rtl/video -Ptb_pic_stream.LATE=$late -o sim/build/tb_pic_stream.vvp \
     rtl/video/qspi_reader.v rtl/video/pic_stream.v tb/flash_model.v tb/tb_pic_stream.v
@@ -135,14 +137,19 @@ python3 -I tools/frame_check.py piccmp
 
 echo "== 10. stage manager: OPEN -> S1 -> C12 -> S2 -> C23 -> S3 -> END -> OPEN (unit test)"
 $IV -I rtl/video -o sim/build/tb_stage_mgr.vvp rtl/top/stage_mgr.v tb/tb_stage_mgr.v
-vvp -n sim/build/tb_stage_mgr.vvp | grep -E "TB_STAGE_MGR|FAIL"
-vvp -n sim/build/tb_stage_mgr.vvp | grep -q "TB_STAGE_MGR: PASS"
+vvp -n sim/build/tb_stage_mgr.vvp > sim/build/tb_stage_mgr.log
+grep -E "TB_STAGE_MGR|FAIL" sim/build/tb_stage_mgr.log
+grep -q "TB_STAGE_MGR: PASS" sim/build/tb_stage_mgr.log
 
-echo "== 11. top level: flash model on the QSPI pins -> OPEN shows the title (pixel exact), BTNC -> Stage 1"
+echo "== 11. top level: flash model on the QSPI pins -> OPEN shows the title (pixel exact), BTNC -> Stage 1;"
+echo "       erased flash -> LED16 red"
 $IVS -o sim/build/tb_top_pic.vvp rtl/common/*.v rtl/video/*.v rtl/ui/*.v rtl/stage1/*.v rtl/stage2/*.v \
   rtl/stage3/*.v rtl/top/*.v tb/flash_model.v tb/tb_top_pic.v
 vvp -n sim/build/tb_top_pic.vvp | tee sim/build/tb_top_pic.log | grep -E "TB_TOP_PIC|FAIL|captured|WARNING"
 grep -q "TB_TOP_PIC: PASS" sim/build/tb_top_pic.log
+vvp -n sim/build/tb_top_pic.vvp +ZERO > sim/build/tb_top_pic_zero.log
+grep -E "TB_TOP_PIC|FAIL" sim/build/tb_top_pic_zero.log
+grep -q "TB_TOP_PIC: PASS" sim/build/tb_top_pic_zero.log
 python3 -I - <<'PY'
 # game area (VGA lines 60..419) = mem/preview/pic_TITLE.png exactly (bg_mode 5, fade 16, empty display list);
 # lines outside the game area black

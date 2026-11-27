@@ -78,7 +78,7 @@ pictures stay in the flash. Redo steps 1, 2, 5 and 6 when `pictures.bin` changes
 
 | What you see | What it means | What to check |
 |---|---|---|
-| **Diagonal magenta/black stripes** where a picture should be (title, or behind the characters in Stage 1/2) | The FPGA runs, but after reset it did not read the 4-byte marker `CPEP` at flash `0x400000` (`missing` in `pic_stream.v`) | Was the `.mcs` (not only the `.bit`) programmed, with Verify passing? Is the flash's QUAD bit set (below)? Otherwise it may be read timing (`docs/STATUS.md`, not verified). Press CPU RESET to try the check again |
+| **Diagonal magenta/black stripes** where a picture should be (title, or behind the characters in Stage 1/2), **RGB LED LD16 red** | The FPGA runs, but it did not read the marker `CPEP` + the expected picture count at flash `0x400000` (`missing` in `pic_stream.v`) | Was the `.mcs` (not only the `.bit`) programmed, with Verify passing? Was the `.mcs` made from the same build (picture count)? Is the flash's QUAD bit set (below)? Otherwise it may be read timing (`docs/STATUS.md`, not verified). The check is repeated on every picture change (next screen) and on CPU RESET |
 | DONE LED stays off after power-on | The FPGA did not configure from flash | JP1 position, memory part chosen, programming/verify messages, QUAD bit |
 | Monitor says "no signal" although the DONE LED is on | Not a flash problem | VGA cable, monitor input |
 | A picture appears but with wrong pixels | The flash is read, but unreliably | Read timing; report it |
@@ -87,6 +87,10 @@ pictures stay in the flash. Redo steps 1, 2, 5 and 6 when `pictures.bin` changes
 non-volatile QUAD bit in the flash chip is 1. Vivado is expected to set it when it programs an x4 image, but
 we have **not verified** that. If you see the symptoms above although programming verified, read the flash's
 configuration register (CR1, bit 1) with a flash tool or ask for help.
+A lit DONE LED after booting from flash is **not** taken as proof that the QUAD bit is set: that would need
+the FPGA's x4 boot to read with the same command (`0x6B`) and to fail, rather than fall back, when the bit is
+0, and we could not confirm either from the Xilinx configuration guide (UG470) here. The game's own check
+is LD16 red / the stripes above.
 
 ## Baseline run for the porting team
 

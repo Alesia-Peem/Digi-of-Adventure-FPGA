@@ -158,14 +158,16 @@ module cpe_escape_top #(
     wire [11:0] pic_rgb;
     wire [9:0]  pic_w, pic_h;
     assign {pic_w, pic_h} = pic_wh(sm_pic_id);
-    wire        qspi_sck; wire [3:0] qspi_dq_o, qspi_dq_oe, qspi_dq_i;
-    pic_stream #(.PIC_BASE(PIC_BASE)) u_ps (
-        .clk(clk), .rst(rst), .pic_id(sm_pic_id), .pic_load(sm_pic_load), .row_req(pic_row_req),
+    //      ps_missing (flash image not found) -> LED16 red; ps_busy is not needed (stage_mgr issues pic_load
+    //      in vblank only, the renderer requests one row per line) and stays unconnected
+    wire        qspi_sck, qspi_eos; wire [3:0] qspi_dq_o, qspi_dq_oe, qspi_dq_i;
+    pic_stream #(.PIC_BASE(PIC_BASE), .PIC_COUNT(PIC_COUNT)) u_ps (
+        .clk(clk), .rst(rst), .cfg_eos(qspi_eos), .pic_id(sm_pic_id), .pic_load(sm_pic_load), .row_req(pic_row_req),
         .src_row(pic_src_row), .rd_x(pic_rd_x), .rd_rgb(pic_rgb), .busy(ps_busy), .missing(ps_missing),
         .qspi_csn(QSPI_CSN), .qspi_sck(qspi_sck), .qspi_dq_i(qspi_dq_i), .qspi_dq_o(qspi_dq_o),
         .qspi_dq_oe(qspi_dq_oe));
     qspi_io u_qio (.sck(qspi_sck), .dq_o(qspi_dq_o), .dq_oe(qspi_dq_oe), .dq_i(qspi_dq_i), .dq(QSPI_DQ),
-        .sim_sck());   // simulation-only clock tap (testbenches read u_qio.sim_sck), unconnected here
+        .eos(qspi_eos), .sim_sck());   // simulation-only clock tap (testbenches read u_qio.sim_sck), unconnected here
 
     wire        dl_we, tx_we, cp_busy, dl_full, lr_ovf;
     wire [7:0]  dl_waddr; wire [63:0] dl_wdata; wire [11:0] tx_waddr; wire [6:0] tx_wdata;
@@ -206,8 +208,10 @@ module cpe_escape_top #(
     // picture screens: only LED15 (demo) / LED14 (overflow)
     assign LED = on2 ? st_led : {demo_on, lr_ovf | dl_full, st_led[13:0]};
     // RGB LEDs are very bright: drive them only 1/16 of the time
-    reg [3:0] pwm; always @(posedge clk) pwm <= pwm + 4'd1;
+    reg [3:0] pwm = 4'd0; always @(posedge clk) pwm <= pwm + 4'd1;   // initial value: also defined in simulation
     wire dim = (pwm == 4'd0);
-    assign {LED16_R, LED16_G, LED16_B} = rgb16 & {3{dim}};
+    // LED16 = solid red while pic_stream reports `missing` (no valid picture image in the flash: see the
+    // README troubleshooting table); otherwise the running stage's colour
+    assign {LED16_R, LED16_G, LED16_B} = (ps_missing ? 3'b100 : rgb16) & {3{dim}};
     assign {LED17_R, LED17_G, LED17_B} = rgb17 & {3{dim}};
 endmodule

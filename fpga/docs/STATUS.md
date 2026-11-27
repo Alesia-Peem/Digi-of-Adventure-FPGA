@@ -14,7 +14,10 @@ section is right.
 * Puzzle maths (`tools/verify_puzzles.py`).
 * Shared modules (`tb/tb_units.v`).
 * Flash streamer `qspi_reader` + `pic_stream` against a behavioural flash model, including the "flash not
-  programmed" case (`tb/tb_pic_stream.v`).
+  programmed" case, the header check (`CPEP` + picture count), the re-check on `pic_load` while missing
+  (recovers once the flash holds the image), start-up clocks only after `STARTUPE2.EOS` (stand-in signal in
+  the testbench) and DQ sampled through an input register (`tb/tb_pic_stream.v`). Erased flash at the top
+  level lights LD16 red (`tb/tb_top_pic.v +ZERO`).
 * Full-screen pictures from the flash (`bg_mode 5`, fade, display list on top), pixel exact
   (`tb/tb_frame_pic.v`); the title picture through the whole top level (`tb/tb_top_pic.v`).
 * Screen sequence OPEN -> S1 -> C12 -> S2 -> C23 -> S3 -> END -> OPEN (`tb/tb_stage_mgr.v`).
@@ -22,7 +25,8 @@ section is right.
   during Task 7; the test inputs come from `demo_py_old/`).
 * Stage 3 (old design): RTL bit-exact with the fixed-point model, model within 2 mm of `demo_py_old`.
 
-`./run_tests.sh quick` passed on 2026-11-27 (sections 4 and 5 reported the expected failures).
+The full `./run_tests.sh` (all 12 sections, incl. the Stage 1/2/3 VGA frame comparisons) passed on 2026-11-27
+after the Phase 0 final-review fixes (sections 4 and 5 reported the expected failures).
 
 ### Not done
 
@@ -39,13 +43,14 @@ section is right.
 * **Open board risk - flash QUAD bit:** the `0x6B` read needs the flash's non-volatile QUAD bit. Vivado is
   expected to set it when programming an x4 image (Trenz Electronic wiki; a web search summary also mentions a
   bug about it in Vivado 2014.1/2014.2, AMD answer 61067, page not read), but this is not confirmed for our tool version or board. Symptom if the game
-  cannot read the flash: **diagonal magenta/black stripes** (`missing`). Since the x4 boot uses quad reads
+  cannot read the flash: **diagonal magenta/black stripes** and **LD16 red** (`missing`). Since the x4 boot uses quad reads
   too, a missing QUAD bit may instead show as "DONE LED stays off" (our inference).
 * **Open board risk - read timing:** `pic_stream` samples with `LATE_SAMPLE = 1` and 8 dummy clocks (flash
-  default latency code assumed). The XDC has no timing constraints for these pins.
+  default latency code assumed). DQ goes through a flip-flop marked `IOB = "TRUE"` (sample moment unchanged);
+  whether Vivado packs it into the IOB is not checked. The XDC has no timing constraints for these pins.
+* `STARTUPE2.EOS` gating of the start-up clocks is simulated only with a stand-in signal (`qspi_io` ties
+  `eos` to 1 under `SIMULATION`).
 * BRAM about 49 of 135 RAMB36 is an **estimate**.
-* The full (non-quick) `./run_tests.sh` has not been run since Task 5. In particular the Stage 3 VGA frame
-  comparison has not been repeated after the later renderer changes.
 
 ### Planned deviation from Pygame
 

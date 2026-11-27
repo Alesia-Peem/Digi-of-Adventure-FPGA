@@ -10,7 +10,7 @@
 `timescale 1ns/1ps
 module tb_frame2;
 `include "pic_map.vh"
-    localparam integer FLASH_BYTES = 5077760;        // size of mem/pictures.hex
+    localparam integer FLASH_BYTES = PIC_BYTES;      // size of mem/pictures.hex (pic_map.vh)
     reg clk = 0, rst = 1;
     always #5 clk = ~clk;
 
@@ -55,8 +55,8 @@ module tb_frame2;
     wire        row_req, ps_busy, missing;
     wire [9:0]  src_row, rd_x;
     wire [11:0] rd_rgb;
-    pic_stream #(.PIC_BASE(PIC_BASE)) ps (
-        .clk(clk), .rst(rst), .pic_id(PIC_S2_ROOM), .pic_load(pic_load), .row_req(row_req), .src_row(src_row),
+    pic_stream #(.PIC_BASE(PIC_BASE), .PIC_COUNT(PIC_COUNT)) ps (
+        .clk(clk), .rst(rst), .cfg_eos(1'b1), .pic_id(PIC_S2_ROOM), .pic_load(pic_load), .row_req(row_req), .src_row(src_row),
         .rd_x(rd_x), .rd_rgb(rd_rgb), .busy(ps_busy), .missing(missing),
         .qspi_csn(qspi_csn), .qspi_sck(qspi_sck), .qspi_dq_i(dq_i), .qspi_dq_o(dq_o), .qspi_dq_oe(dq_oe));
     flash_model #(.BASE(PIC_BASE), .SIZE(FLASH_BYTES)) fm (.csn(qspi_csn), .sck(qspi_sck), .dq(dq));

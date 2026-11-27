@@ -5,20 +5,23 @@
 //   -> the next complete VGA frame is captured to sim/frames/top_title.ppm (run_tests.sh section 11 checks
 //      it pixel exactly against mem/preview/pic_TITLE.png: empty display list, fade 16)
 //   -> BTNC tap -> stage_mgr must enter Stage 1 (s1_enter pulse, screen S1, bg_mode no longer 5).
+//   LED16 (RGB) stays dark on the title screen with a programmed flash.
+//   +ZERO (erased flash): pic_stream `missing` must light LED16 red (LED16_R, dimmed PWM), G / B off.
 `timescale 1ns/1ps
 module tb_top_pic;
 `include "pic_map.vh"
-    localparam integer FLASH_BYTES = 5077760;        // size of mem/pictures.hex
+    localparam integer FLASH_BYTES = PIC_BYTES;      // size of mem/pictures.hex (pic_map.vh)
     reg clk = 1'b0, rstn = 1'b0;
     always #5 clk = ~clk;
     reg btnc = 1'b0;
 
+    wire        l16r, l16g, l16b;
     wire [15:0] led; wire [7:0] an; wire [3:0] r, g, b; wire hs, vs;
     wire        qspi_csn; wire [3:0] qspi_dq;
     pullup (qspi_dq[0]); pullup (qspi_dq[1]); pullup (qspi_dq[2]); pullup (qspi_dq[3]);
     cpe_escape_top #(.MEM_DIR("mem/"), .SIM_FAST(1)) dut (
         .CLK100MHZ(clk), .CPU_RESETN(rstn), .BTNC(btnc), .BTNU(1'b0), .BTNL(1'b0), .BTNR(1'b0), .BTND(1'b0),
-        .SW(16'd0), .LED(led), .LED16_R(), .LED16_G(), .LED16_B(), .LED17_R(), .LED17_G(), .LED17_B(),
+        .SW(16'd0), .LED(led), .LED16_R(l16r), .LED16_G(l16g), .LED16_B(l16b), .LED17_R(), .LED17_G(), .LED17_B(),
         .CA(), .CB(), .CC(), .CD(), .CE(), .CF(), .CG(), .DP(), .AN(an),
         .VGA_R(r), .VGA_G(g), .VGA_B(b), .VGA_HS(hs), .VGA_VS(vs),
         .QSPI_CSN(qspi_csn), .QSPI_DQ(qspi_dq));
@@ -50,10 +53,33 @@ module tb_top_pic;
         fe_prev = frame_end;
     end
 
-    integer i, fd;
+    integer i, fd, n_r, n_gb;
+    task led16(input integer cycles);       // count LED16 R / G+B high cycles
+        begin
+            n_r = 0; n_gb = 0;
+            for (i = 0; i < cycles; i = i + 1) begin
+                @(negedge clk);
+                if (l16r) n_r = n_r + 1;
+                if (l16g || l16b) n_gb = n_gb + 1;
+            end
+        end
+    endtask
     initial begin
         for (i = 0; i < 640 * 480; i = i + 1) img[i] = 12'hABC;
         repeat (20) @(negedge clk); rstn = 1'b1;
+        if ($test$plusargs("ZERO")) begin
+            i = 0;
+            while (!dut.ps_missing && i < 100000) begin @(negedge clk); i = i + 1; end
+            if (!dut.ps_missing) begin errors = errors + 1; $display("FAIL missing not set with an erased flash"); end
+            led16(64);
+            if (n_r == 0 || n_gb != 0) begin
+                errors = errors + 1;
+                $display("FAIL LED16 does not show missing (R high %0d of 64 clk, G/B high %0d)", n_r, n_gb);
+            end
+            $display("TB_TOP_PIC: %0s (erased flash: missing -> LED16 red, R high %0d of 64 clk)",
+                     errors == 0 ? "PASS" : "FAIL", n_r);
+            $finish;
+        end
         if (pic_wh(PIC_S1_ROOM) != {10'd640, 10'd358} || pic_wh(PIC_TITLE) != {10'd640, 10'd360})
             begin errors = errors + 1; $display("FAIL pic_wh table"); end
         // first vblank: OPEN + pic_load of the title
@@ -67,6 +93,8 @@ module tb_top_pic;
         if (dut.ps_missing) begin errors = errors + 1; $display("FAIL pic_stream: flash magic missing"); end
         capturing = 1'b1;
         @(posedge frame_end); @(negedge clk); capturing = 1'b0;
+        led16(64);                          // after the capture: led16 consumes clk
+        if (n_r != 0 || n_gb != 0) begin errors = errors + 1; $display("FAIL LED16 lit on the title screen"); end
         fd = $fopen("sim/frames/top_title.ppm", "w");
         $fdisplay(fd, "P3 640 480 15");
         for (i = 0; i < 640 * 480; i = i + 1) $fdisplay(fd, "%0d %0d %0d", img[i][11:8], img[i][7:4], img[i][3:0]);

@@ -5,10 +5,11 @@
 //   +off 256 x u16 palette 0x0RGB   +off+512 h rows x w bytes of palette index
 //
 // INTERFACE
-//   * After reset: reads the magic once. `missing` = 1 when it is not "CPEP" (flash not programmed,
-//     QUAD bit not set, ...). While missing, pic_load / row_req never touch the flash and rd_rgb shows
-//     a diagonal stripe pattern (16 px magenta / black, moving with the row number) so the screen is
-//     recognisable without any help from the renderer.
+//   * After reset: reads the first 6 bytes. `missing` = 1 when they are not "CPEP" + u16 count = PIC_COUNT
+//     (flash not programmed, QUAD bit not set, image from another build, ...). While missing, row_req never
+//     touches the flash and rd_rgb shows a diagonal stripe pattern (16 px magenta / black, moving with the
+//     row number) so the screen is recognisable without any help from the renderer; a pic_load re-reads
+//     those 6 bytes (busy meanwhile) and, if they are good now, clears `missing` and loads the picture.
 //   * pic_load pulse (in vblank): reads the header entry of pic_id (off, w, h) and the 256-entry
 //     palette into the palette RAM, invalidates the row buffer. ~2.3k clk.
 //   * row_req pulse + src_row: ROW BUFFER INVARIANT - after the k-th row_req (k >= 2) the row requested
@@ -29,11 +30,13 @@
 `timescale 1ns/1ps
 module pic_stream #(
     parameter [23:0] PIC_BASE    = 24'h400000,   // = PIC_BASE of pic_map.vh
+    parameter integer PIC_COUNT   = 0,            // = PIC_COUNT of pic_map.vh (pass it: 0 never matches)
     parameter integer DUMMY       = 8,
     parameter integer LATE_SAMPLE = 1
 ) (
     input  wire        clk,
     input  wire        rst,
+    input  wire        cfg_eos,       // STARTUPE2.EOS via qspi_io (1 in simulation), see qspi_reader
     input  wire [4:0]  pic_id,
     input  wire        pic_load,
     input  wire        row_req,
@@ -56,7 +59,7 @@ module pic_stream #(
     wire        qr_busy, qr_dv;
     wire [7:0]  qr_data;
     qspi_reader #(.DUMMY(DUMMY), .LATE_SAMPLE(LATE_SAMPLE)) u_qr (
-        .clk(clk), .rst(rst), .start(qr_start), .addr(qr_addr), .len(qr_len), .busy(qr_busy),
+        .clk(clk), .rst(rst), .cfg_eos(cfg_eos), .start(qr_start), .addr(qr_addr), .len(qr_len), .busy(qr_busy),
         .data(qr_data), .data_valid(qr_dv), .qspi_csn(qspi_csn), .qspi_sck(qspi_sck),
         .qspi_dq_i(qspi_dq_i), .qspi_dq_o(qspi_dq_o), .qspi_dq_oe(qspi_dq_oe));
     wire qr_done = !qr_busy && !qr_start;          // burst finished (start is registered: see S_* below)
@@ -90,7 +93,7 @@ module pic_stream #(
     localparam [2:0] S_RST = 3'd0, S_MAGIC = 3'd1, S_IDLE = 3'd2, S_HDR = 3'd3, S_PAL = 3'd4,
                      S_RADDR = 3'd5, S_ROW = 3'd6;
     reg [2:0]  st;
-    reg [31:0] magic;
+    reg [47:0] magic;             // "CPEP" + count (LE), in read order
     reg [63:0] hdr;
     reg [10:0] bcnt;
     reg [7:0]  pal_lo;
@@ -113,7 +116,8 @@ module pic_stream #(
     wire [20:0] mul = pend_r * wlen;               // row * w
     wire [23:0] hoff = hdr[23:0];                  // picture offset (the image is < 16 MiB)
 
-    assign busy = (st != S_IDLE) || (!missing && (pend_load || pend_row));
+    wire hdr_ok = (magic[47:16] == 32'h43504550) && ({magic[7:0], magic[15:8]} == PIC_COUNT);
+    assign busy = (st != S_IDLE) || pend_load || (!missing && pend_row);
 
     always @(posedge clk) begin
         if (rst) begin
@@ -121,21 +125,26 @@ module pic_stream #(
             missing <= 1'b0; loaded <= 1'b0; pend_load <= 1'b0; pend_row <= 1'b0; pend_id <= 5'd0;
             pend_r <= 10'd0; prev_r <= 10'd0; has_prev <= 1'b0; v0 <= 1'b0; v1 <= 1'b0;
             tag0 <= 10'd0; tag1 <= 10'd0; front <= 1'b0; tgt <= 1'b0;
-            rb_we <= 1'b0; pal_we <= 1'b0; bcnt <= 11'd0; magic <= 32'd0; hdr <= 64'd0;
+            rb_we <= 1'b0; pal_we <= 1'b0; bcnt <= 11'd0; magic <= 48'd0; hdr <= 64'd0;
             img_base <= 24'd0; wlen <= 11'd0; rowoff <= 21'd0;
         end else begin
             qr_start <= 1'b0; rb_we <= 1'b0; pal_we <= 1'b0;
             case (st)
             S_RST: if (!qr_busy) begin                       // reader finished its CS#-high init clocks
-                qr_addr <= PIC_BASE; qr_len <= 16'd4; qr_start <= 1'b1; st <= S_MAGIC;
+                qr_addr <= PIC_BASE; qr_len <= 16'd6; qr_start <= 1'b1; st <= S_MAGIC;
             end
             S_MAGIC: begin
-                if (qr_dv) magic <= {magic[23:0], qr_data};
-                if (qr_done) begin missing <= (magic != 32'h43504550); st <= S_IDLE; end   // "CPEP"
+                if (qr_dv) magic <= {magic[39:0], qr_data};
+                if (qr_done) begin                           // "CPEP", count low byte, count high byte
+                    missing <= !hdr_ok;
+                    if (!hdr_ok) pend_load <= 1'b0;          // a good header keeps a pending load
+                    st <= S_IDLE;
+                end
             end
             S_IDLE: begin
-                if (missing) begin
-                    pend_load <= 1'b0; pend_row <= 1'b0;
+                if (missing) begin                           // rows: ignored; pic_load: check again
+                    pend_row <= 1'b0;
+                    if (pend_load) st <= S_RST;
                 end else if (pend_load) begin
                     pend_load <= 1'b0; loaded <= 1'b0; v0 <= 1'b0; v1 <= 1'b0; has_prev <= 1'b0;
                     qr_addr <= PIC_BASE + 24'd8 + {16'd0, pend_id, 3'd0}; qr_len <= 16'd8;

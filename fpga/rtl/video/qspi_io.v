@@ -1,11 +1,14 @@
 // qspi_io.v - the ONLY place with Xilinx primitives: QSPI flash pins of the Nexys A7 (S25FL128S).
-//   * SCK: the flash clock pin (L16 / CCLK) is a dedicated configuration pin; after configuration user
-//     logic reaches it only through STARTUPE2.USRCCLKO (UG470). qspi_reader.v sends >= 8 SCK cycles with
-//     CS# high first because the first USRCCLKO edges after configuration are swallowed.
+//   * SCK: the flash clock is the dedicated configuration pin CCLK_0 (E9 on the CSG324 package; it is not
+//     in the XDC); after configuration user logic reaches it only through STARTUPE2.USRCCLKO (UG470).
+//     USRCCLKO only reaches the pin after the end of startup (EOS), and its first edges after that are
+//     swallowed: `eos` = STARTUPE2.EOS (asynchronous to clk - qspi_reader synchronises it, waits until it
+//     has been 1 for a while, then sends >= 8 SCK cycles with CS# high before the first command).
 //   * DQ[3:0]: one IOBUF each (I = dq_o, T = ~dq_oe, O = dq_i).  CS#: plain output (QSPI_CSN port).
 // SIMULATION (iverilog -DSIMULATION, run_tests.sh): behavioural model, no primitives. The sim clock is then
 //   available on `sim_sck` - testbenches connect their flash model to it (e.g. dut.u_qio.sim_sck), because a
 //   simulated STARTUPE2 does not drive the CCLK pin. In synthesis `sim_sck` is tied to 0 and left unconnected.
+//   `eos` is tied to 1 (configuration is long over when a simulation starts).
 //   create_project.tcl must NOT define SIMULATION.
 `timescale 1ns/1ps
 module qspi_io (
@@ -14,10 +17,12 @@ module qspi_io (
     input  wire [3:0] dq_oe,        // 1 = FPGA drives that DQ
     output wire [3:0] dq_i,
     inout  wire [3:0] dq,           // QSPI_DQ pads
+    output wire       eos,          // STARTUPE2.EOS: 1 = configuration startup finished (asynchronous)
     output wire       sim_sck       // simulation only: the flash clock (0 in synthesis)
 );
 `ifdef SIMULATION
     assign sim_sck = sck;
+    assign eos     = 1'b1;
     genvar i;
     generate
         for (i = 0; i < 4; i = i + 1) begin : g_dq
@@ -28,7 +33,7 @@ module qspi_io (
 `else
     assign sim_sck = 1'b0;
     STARTUPE2 #(.PROG_USR("FALSE"), .SIM_CCLK_FREQ(0.0)) u_startup (
-        .CFGCLK(), .CFGMCLK(), .EOS(), .PREQ(),
+        .CFGCLK(), .CFGMCLK(), .EOS(eos), .PREQ(),
         .CLK(1'b0), .GSR(1'b0), .GTS(1'b0), .KEYCLEARB(1'b1), .PACK(1'b0),
         .USRCCLKO(sck), .USRCCLKTS(1'b0), .USRDONEO(1'b1), .USRDONETS(1'b1));
     genvar i;
