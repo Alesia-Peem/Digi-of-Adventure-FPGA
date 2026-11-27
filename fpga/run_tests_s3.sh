@@ -40,4 +40,15 @@ echo "== 6. RTL animals (patrol, follower, walk + water, fly, pop) and contacts 
 $IV -Pcr_tb_cosim.PHYS=2 -o sim/build/cr_tb_cosim_a.vvp rtl/stage3/cr_math.v rtl/stage3/cr_core.v tb/cr_tb_cosim.v
 vvp -n sim/build/cr_tb_cosim_a.vvp +STIM=sim/cr_animals_stim.mem +OUT=sim/cr_animals_rtl.txt | grep CR_TB
 (cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py cmp animals animals)
+echo "== 7. RTL full game (reporter, skills, lifts, tea, doors, flow) vs the model, every scenario of section 3"
+$IV -o sim/build/cr_tb_cosim_f.vvp rtl/stage3/cr_math.v rtl/stage3/cr_core.v tb/cr_tb_cosim.v
+for s in plan1 plan2 plan3 careless skill interview pit lift timeout restart buttons; do
+  vvp -n sim/build/cr_tb_cosim_f.vvp +STIM=sim/cr_${s}_stim.mem +OUT=sim/cr_${s}_rtl.txt > /dev/null
+  (cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py cmp $s)
+done
+
+echo "== 8. RTL button / command timing at 2 steps per tick"
+$IV -o sim/build/cr_tb_ctrl.vvp rtl/stage3/cr_math.v rtl/stage3/cr_core.v tb/cr_tb_ctrl.v
+vvp -n sim/build/cr_tb_ctrl.vvp | tee sim/cr_tb_ctrl.log | grep -E "CR_TB_CTRL|FAIL"
+grep -q "CR_TB_CTRL: PASS" sim/cr_tb_ctrl.log
 echo "CR TESTS: PASS"

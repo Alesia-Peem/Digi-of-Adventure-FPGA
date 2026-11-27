@@ -464,8 +464,30 @@ def model_consts():
                   KILL_Y=-2 * M.Q, H120_M=71582789)
     # floor(ANIMAL_H * e / 120) == (ANIMAL_H * e * H120_M) >> 33 for every exposure e = 0..120
     assert all((M.ANIMAL_H * e * 71582789) >> 33 == M.ANIMAL_H * e // M.ANT_RAMP for e in range(121))
+    Q = M.Q
+    for s in (1, 2, 3):
+        spawn = M.SPAWNS[s][0] * Q
+        signed["SPAWN_U%d" % s] = spawn
+        signed["SPAN%d" % s] = M.DOORS[s][0] - spawn
+        for k, v in zip("XYWH", M.DOORS[s]):
+            signed["DOOR%d_%s" % (s, k)] = v
+    signed.update(LIFT_LOW=M.LIFT_LOW, LIFT_HIGH=M.LIFT_HIGH, LIFT_SPEED=M.LIFT_SPEED, SINK_SPEED=M.SINK_SPEED,
+                  LIFT0_BX_F=162 * cell, LIFT1_BX_F=207 * cell, TEA_VX=M.TEA_VX, TEA_VY=M.TEA_VY, TEA_G=M.TEA_G,
+                  TEA_STOP=M.TEA_STOP, TEA_HALF=M.TEA_HALF, TEA_H=M.TEA_H, TEA_X0=M.PUZZLE_X + Q // 2,
+                  TEA_Y0=M.PUZZLE_Y + Q, GAP=M.GAP, GAP_STILL=M.GAP_STILL, NEAR_PLAYER=M.NEAR_PLAYER,
+                  RETREAT_STEP=M.RETREAT_STEP, FEET=M.FEET, TOL_Y=M.TOL_Y, TOL_X=M.TOL_X, HALF_W=M.HALF_W,
+                  PH=M.PH, HIT_AHEAD=13 * Q // 10, TRAIL_DX=Q // 5, TRAIL_DY=7 * Q // 20, TEN_Q=10 * Q,
+                  ELEVEN_Q=11 * Q, TWELVE_Q=12 * Q, TWO_Q=2 * Q, THREE_Q=3 * Q)
+    assert M.LIFT_LOW <= 4 * Q <= M.LIFT_HIGH and 13 * Q % 10 == 0
     timers = dict(COYOTE=M.COYOTE, BUFFER=M.BUFFER, DOUBLE_STEPS=M.DOUBLE_STEPS, DOUBLE_LAST=M.DOUBLE_LAST,
-                  T_LIMIT=M.T_LIMIT)
+                  T_LIMIT=M.T_LIMIT, T_NOTICE=M.T_NOTICE, T_FLASH=M.T_FLASH, T_PROTECT=M.T_PROTECT,
+                  T_PROTECT_AFTER=M.T_PROTECT_AFTER, T_SKILL=M.T_SKILL, T_INTERVIEW=M.T_INTERVIEW,
+                  T_FOLLOW=M.T_FOLLOW, T_RETREAT=M.T_RETREAT, T_CLEAR=M.T_CLEAR, T_GROW=M.T_GROW,
+                  ROUTE_OLD=M.ROUTE_OLD, QUESTIONS=M.QUESTIONS)
+    names = ("NONE NEW TIMEUP SPLASH FELL STAGE2 STAGE3 NEED_CHASE PICK_TEA TEA REPORTER NEAR1 NEAR2 NEAR3 "
+             "NEED_TEA").split()
+    assert [getattr(M, "MSG_" + n) for n in names] == list(range(15))
+    timers.update({"MSG_" + n: i for i, n in enumerate(names)})
     out = ["// ---- cr_model.py constants ----"]
     out += ["localparam signed [47:0] CR_%s = %s48'sd%d;" % (k, "-" if v < 0 else "", abs(v))
             for k, v in signed.items()]          # sized: several do not fit the 32-bit default

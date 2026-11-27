@@ -32,12 +32,17 @@ module cr_tb_cosim;
             eact[j] = dut.e_active[j];
             ealive[j] = dut.e_alive[j];
         end
-        $fdisplay(fd, "%0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %s %0d %0d %0d %0d %0d %0d %0d",
-            steps,
+        $fwrite(fd, "%0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d ", steps,
             dut.mode_r, dut.stage, dut.xf, dut.yf, dut.vyf, dut.gf, dut.vxf, dut.jumps, dut.elapsed, dut.grounded,
-            dut.grace, dut.buffer, dut.face_l ? -1 : 1, dut.walking, dut.cam, dut.stride, dut.time_left,
-            "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
-            dut.lfsr, ex, ey, eact, ealive, eexp, dut.contacts);
+            dut.grace, dut.buffer, dut.face_l ? -1 : 1, dut.walking, dut.cam, dut.stride, dut.time_left);
+        $fwrite(fd, "%0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d ",
+            dut.skill, dut.used, dut.chase, dut.interview, dut.protection, dut.follow, dut.retreat, dut.flash,
+            dut.notice, dut.message, dut.gold, dut.opened, dut.tea_on, dut.tea_on ? dut.tea_x : 0,
+            dut.tea_on ? dut.tea_y : 0, dut.lifts_on ? dut.lt0 : 0, dut.lifts_on ? dut.lt1 : 0);
+        $fwrite(fd, "%0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d ",
+            dut.rx, dut.ry, dut.rdir_l ? -1 : 1, dut.rvisible, dut.rwalking, dut.q0, dut.q1,
+            (dut.mode_r == 2 || dut.mode_r == 3) ? 100 : dut.prog, dut.near, dut.grow, dut.exit_req);
+        $fdisplay(fd, "%0d %0d %0d %0d %0d %0d %0d", dut.lfsr, ex, ey, eact, ealive, eexp, dut.contacts);
         steps = steps + 1;
     end
     initial begin

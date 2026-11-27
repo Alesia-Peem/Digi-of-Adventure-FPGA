@@ -185,6 +185,7 @@ class Run:
         self.late_notice = False
         self.words, self.trace = [], []        # the stimulus given so far, the model's snapshot after each step
         self.replayable = True                 # False once something happened that the words cannot express
+        self.seed_q = self.m.rng.q             # generator state at the start (the hardware gets it by SEED)
         self.m.wakes = self.wakes
         if setup:
             setup(self.g, self.m)
@@ -230,6 +231,9 @@ class Run:
             m.restart()
         elif op == OP_PUT:                    # arg: x in half metres [8:0], y in half metres [13:9], standing [14]
             teleport(g, m, (arg & 511) / 2, (arg >> 9 & 31) / 2, bool(arg >> 14 & 1))
+        elif op == OP_SEED:
+            m.rng.q = arg or M.SEED
+            G.random.lfsr.q = arg or M.SEED
         elif op == OP_WIN:
             m.confirm()
         elif op == OP_GOLD:
@@ -496,15 +500,45 @@ class PhysRun:
             self.m.teleport((arg & 511) * M.Q // 2, (arg >> 9 & 31) * M.Q // 2, bool(arg >> 14 & 1))
         elif op == OP_SEED:
             self.m.rng.q = arg or M.SEED
+        elif op == OP_WIN:
+            self.m.confirm()
+        elif op == OP_GOLD:
+            self.m.gold = True
 
     def put(self, x, y, grounded=True):
         assert x * 2 == int(x * 2) and y * 2 == int(y * 2) and 0 <= x < 256 and 0 <= y < 16
         self.command(OP_PUT, int(x * 2) | int(y * 2) << 9 | grounded << 14)
 
-    def step(self, axis=0, jump=False):
-        self.words.append((axis < 0) | (axis > 0) << 1 | bool(jump) << 2)
-        self.m.step(axis, jump)
+    def step(self, axis=0, jump=False, skill=False, menu=False):
+        self.words.append((axis < 0) | (axis > 0) << 1 | bool(jump) << 2 | bool(skill) << 3 | bool(menu) << 4)
+        if menu:
+            self.m.pause_toggle()
+        self.m.step(axis, jump, skill)
         self.trace.append(self.m.snapshot())
+
+
+def plan_pure(stage):
+    """the saved route driven by the pure model, so the level is cleared in exactly what cr_core is compared
+    with (the game-checked version is cr_test_model.test_routes_clear_every_level). Returns the words."""
+    r = PhysRun(model(1))
+    first = r.m.rng.q
+    if stage != 1:
+        r.command(OP_STAGE, stage)
+    route, i = routes()[stage], 0
+    while r.m.mode == M.PLAY:
+        if r.m.interview:
+            r.step()                                   # the world is frozen: the route waits
+            continue
+        axis, jump = route[i] if i < len(route) else (1, False)
+        r.step(axis, jump)
+        i += 1
+        assert i < len(route) + 600, "stage %d: the route no longer reaches the door" % stage
+    for _ in range(300 if stage != 3 else 5):
+        r.step()
+    if stage == 3:
+        r.command(OP_WIN)
+        r.step()
+    return [CMD | OP_SEED << 12 | first << 16] + r.words
 
 
 def _phys():
@@ -693,15 +727,45 @@ def play(name):
     return SCEN[name]()
 
 
+def replay(words, test_mode=0):
+    """the pure integer model (no game tie answers) on stimulus words: what cr_core.v must print, step by step"""
+    m = model(1, physics_only=test_mode == 1)
+    if test_mode == 2:
+        m.no_lifts = True
+        m.hit = lambda: None
+        m.restart()
+    trace = []
+    for w in words:
+        if w & CMD:
+            op, arg = w >> 12 & 15, w >> 16
+            if op == OP_STAGE:
+                m.stage = arg
+                m.restart()
+            elif op == OP_PUT:
+                m.teleport((arg & 511) * M.Q // 2, (arg >> 9 & 31) * M.Q // 2, bool(arg >> 14 & 1))
+            elif op == OP_SEED:
+                m.rng.q = arg or M.SEED
+            elif op == OP_WIN:
+                m.confirm()
+            elif op == OP_GOLD:
+                m.gold = True
+            continue
+        if w >> 4 & 1:
+            m.pause_toggle()
+        m.step((w >> 1 & 1) - (w & 1), bool(w >> 2 & 1), bool(w >> 3 & 1))
+        trace.append(m.snapshot())
+    return trace
+
+
 def gen(name):
-    """write sim/cr_<name>_stim.mem and _expect.txt; True if the original game and the model agree"""
+    """write sim/cr_<name>_stim.mem and _expect.txt; True if the original game and the model agree.
+    The expectation is the pure model replayed on the words: the RTL compares exactly, ties included."""
     r = play(name)
     assert r.replayable, "%s: uses a position the hardware commands cannot express" % name
-    os.makedirs(SIM, exist_ok=True)
-    with open(os.path.join(SIM, "cr_%s_stim.mem" % name), "w") as f:
-        f.writelines("%08X\n" % w for w in r.words)
-    with open(os.path.join(SIM, "cr_%s_expect.txt" % name), "w") as f:
-        f.writelines("%d %s\n" % (i, " ".join(str(v) for v in row)) for i, row in enumerate(r.trace))
+    words = [CMD | OP_SEED << 12 | r.seed_q << 16] + r.words
+    if name.startswith("plan"):
+        words = plan_pure(int(name[-1]))
+    _write(name, words, replay(words))
     print("cr %-10s %6d steps: %s  (worst %.3f mm, %d ties)" %
           (name, r.t, "PASS" if not r.first_diff else "DIFF " + r.first_diff, r.worst, len(r.ties)))
     return not r.first_diff
