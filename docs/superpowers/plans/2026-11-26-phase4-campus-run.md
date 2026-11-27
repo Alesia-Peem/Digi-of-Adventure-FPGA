@@ -257,3 +257,35 @@ It must state, with exact widths, formats and a test criterion for each:
 7. BRAM report from Task 2 and its dependency on Phase 0 Task 7 (rooms leaving BRAM).
 
 - [ ] Write it, check every number against `cr_assets.py` output, commit, tell the user.
+
+---
+
+## Follow-up tasks (user decisions, 2026-11-27)
+
+The user chose: **footprints modelled exactly** (model + core, bit-exact), and **publish outputs in the
+Stage 1/2 format** (`fields[3071:0]` 24-bit numbers + `conds[255:0]` booleans, field 0 = 0, cond 0 = 1).
+
+### Task 11: Footprints (game.py `footprint()`, `winter_art.tracks`)
+
+- Model: `prints` (deque of 72: x, y, step, kind 0..3 species / 4 boot, direction, side) and `last_steps`
+  (per walker); a print fades when `now - t0 > 240`, or `== 240` and `EXPIRE_240[t0]` (float time sums: the
+  answer at exactly 240 steps depends on t0) → ROM `cr_fpexp.mem` (16 384 × 1).
+- Snapshot columns `prints_n prints_x prints_y prints_meta`; game-vs-model compares every print (1 mm, exact
+  step / kind / direction / side) inside `cr_cosim.Run.check`.
+- Core: ring of 128 slots holding ≤ 72 prints, per-walker last step (65 entries), prune loop at step start.
+- Done when: `cr_test_model.py` and `run_tests_s3.sh` pass with the 4 new columns.
+
+### Task 12: Publish fields (core → `ui_composer`)
+
+- `fpga/tools/cr_fields.py` (this branch's file): `FIELDS_CR`, `CONDS_CR` lists → generated
+  `rtl/stage3/cr_fields.vh` (`localparam CRF_<name>`, `CRC_<name>`); the other session points `ui_spec.py`'s
+  Stage 3 entries at this list when the old Stage 3 is removed (`s3_core` still uses `FIELDS3` today).
+- Screen positions in world-frame pixels (640 × 352, before the 352 → 360 resize), with Python's rounding:
+  `x = round((pos - cam) * 32)` half-to-even, `y = round(352 - pos * 32)`.
+- 16 animal slots (most seen in the scenarios: 7), in list order of the visible animals
+  (`cam - 1 <= x <= cam + 21`), overflow → cond `CRC_OVERFLOW`.
+- Footprints do not fit in 127 fields: read port `q_idx[6:0]` → `q_data` = one print (screen x, y, age,
+  kind, direction, side).
+- Python reference `cr_model.Model.publish()`; RTL fields/conds bit-exact with it on every step of every
+  scenario (cr_tb_cosim prints them); `publish()` checked against the numbers `render.py` / `hud.py` compute
+  from the float game state (named half-pixel ties only).
