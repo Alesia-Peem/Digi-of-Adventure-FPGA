@@ -79,7 +79,7 @@ real RAMB36/RAMB18 per instance. With the rooms in the flash the estimate fits t
 | `0x000000` | FPGA bitstream (read by the FPGA at power-up, x4) | XC7A100T uncompressed: 30 606 304 bits = 3 825 788 B, ends below `0x3A6100` |
 | `0x3A6100`..`0x3FFFFF` | unused (about 360 KB) | |
 | `0x400000` = `PIC_BASE` | `mem/pictures.bin`: header "CPEP" + 22 pictures | 5 077 760 B, ends at `0x8D7B00` |
-| `0x8D7B00`..`0xFFFFFF` | free (room for more pictures) | about 7.4 MB |
+| `0x8D7B00`..`0xFFFFFF` | free (room for more pictures) | about 7.5 MB |
 
 `PIC_BASE` is set in `tools/pic_pack.py` (-> `rtl/video/pic_map.vh`) and repeated in `vivado/make_flash.tcl`.
 

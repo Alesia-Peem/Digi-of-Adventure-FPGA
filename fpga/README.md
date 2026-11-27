@@ -72,7 +72,7 @@ game reads pictures from there while it runs).
    (BTNC again closes its help screen).
 
 After that you can try a new Verilog build quickly over JTAG (*Program Device* with the `.bit`): the
-pictures stay in the flash. Redo steps 2, 5 and 6 when `pictures.bin` changes.
+pictures stay in the flash. Redo steps 1, 2, 5 and 6 when `pictures.bin` changes, because picture offsets and sizes are compiled into the bitstream through `pic_map.vh`, so the bitstream must be rebuilt. A design loaded only over JTAG is lost at power-off; to keep a Verilog change after power-off, redo steps 1, 2, 5 and 6.
 
 ### If something is wrong
 
