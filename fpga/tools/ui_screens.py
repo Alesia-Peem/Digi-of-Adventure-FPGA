@@ -82,8 +82,12 @@ def closeup_frame_top(p):
 
 def closeup_frame_bottom(p, foot):
     """cmsg lines, footer bar, footer text (foot = list of (cond, text))"""
+    # commit() feedback ("CORRECT! ..." / "INCORRECT! ...") is up to 112 characters: Pygame wraps it at 610 px
+    # (max 2 lines); here the 6x12 font, 66 characters per line, 2 lines of 13 px above the footer bar
+    p.textt(SX(16), U(440), "CMSG", "CMSG", CMSG, font="s", lh=13, wrap=66, cond="CMSG_LONG")
     with p.when("CMSG_ON"):
-        p.textt(SX(16), U(440), "CMSG", "CMSG", CMSG)
+        # same (table, wrap) key as above -> one set of pointers (the short messages never wrap at 66)
+        p.textt(SX(16), U(440), "CMSG", "CMSG", CMSG, wrap=66, cond="!CMSG_LONG")
         with p.when("CMSG_TN"):
             p.num(0, 0, "CMSG_P", "dec", CMSG, xcont=True)
             p.textt(0, 0, "CMSG_SUFFIX", "CMSG", CMSG, xcont=True)
@@ -339,13 +343,12 @@ def draw_notebook(p):
         p.num(0, 0, "ANS_C", "dec", GOLD, font="s", xcont=True, cond="ANSC_V")
         p.text(0, 0, "?", GOLD, font="s", xcont=True, cond="!ANSC_V")
         p.text(SX(80), U(140), "Logged Actions & Clues:", FOOT, font="s")
-        for k in range(8):                      # notes[-8:], one line each (13 px)
-            y = U(140) + 15 + k * 13
-            with p.when("NOTE_V%d" % k):
-                p.textt(SX(80), y, "NOTE", "NOTE_T%d" % k, C((230, 230, 230)), font="s")
-                p.num(0, 0, "NOTE_V%d" % k, "dec", C((230, 230, 230)), font="s", xcont=True, cond="NOTE_D%d" % k)
-                p.num(0, 0, "NOTE_V%d" % k, "eqn", C((230, 230, 230)), font="s", xcont=True, cond="NOTE_E%d" % k)
-                p.num(0, 0, "NOTE_V%d" % k, "let3", C((230, 230, 230)), font="s", xcont=True, cond="NOTE_L%d" % k)
+        # notes (fixed texts, see ui_spec NOTE), each wrapped at 53 characters (blit_wrap 480 px), flowing down
+        # from U(140) + 15 in 13 px lines. At most 6 notes / 8 lines (P1, P2 in 2 orders, P3, P4, P5; P3 and P4
+        # take 2 lines), so the 8-line area above "Hints Used:" is never overrun.
+        for k in range(8):
+            p.textt(SX(80), 2 if k == 0 else 0, "NOTE", "NOTE_T%d" % k, C((230, 230, 230)), font="s", ycont=True,
+                    lh=13, wrap=53, cond="NOTE_V%d" % k)
         hy = U(140) + 15 + 8 * 13 + 6
         p.text(SX(80), hy, "Hints Used:", FOOT, font="s")
         p.ofs()
@@ -399,8 +402,9 @@ def draw_status(p):
 
 def draw_toast(p):
     with p.when("TOAST_ON"):
-        # black box sized to the text: centred text, box drawn from the widest message (24 chars)
-        p.rect(320 - 110, U(14), 320 + 110, U(14 + 34), 0)
+        # black box sized to the text: centred text, box drawn from the widest message
+        # ("Puzzle n correct - saved to Notebook", 36 chars)
+        p.rect(320 - 158, U(14), 320 + 158, U(14 + 34), 0)
         p.textt(320, U(14) + 3, "TOAST", "TOAST", WHITE, center=True)
 
 
@@ -462,7 +466,7 @@ def preview_states():
         "map_dark": st(base, ["HEART1", "HEART2", "MAP", "PLAY"]),
         "wb_p0": st(dict(base, OBJ=0), hearts + ["CLOSEUP", "CU_WB", "PAGE0"], cu),
         "wb_p1": st(dict(base, OBJ=0, P1VAL=6, ANS_A=6, PAGE=1, CMSG=1),
-                    hearts + ["CLOSEUP", "CU_WB", "PAGE1", "SW1", "SW2", "DONE1", "CMSG_ON"], cu),
+                    hearts + ["CLOSEUP", "CU_WB", "PAGE1", "SW1", "SW2", "DONE1", "CMSG_ON", "CMSG_LONG"], cu),
         "paper_p0": st(dict(base, OBJ=1), hearts + ["CLOSEUP", "CU_PAPER", "PAGE0"], cu),
         "paper_p1": st(dict(base, OBJ=1, P2_T1=0xCC, P2_T2=0x33, P2_SW=0x90, P2_EQN=0x33CC, CMSG=2, CMSG_P=2),
                        hearts + ["CLOSEUP", "CU_PAPER", "PAGE1", "P2C1", "DONE2", "CMSG_ON", "CMSG_TN"], cu),
@@ -478,10 +482,10 @@ def preview_states():
         "cards_r1": st(dict(base, CIMG0=48, CIMG1=49, CIMG2=50), hearts + ["MAP", "DECK", "CARD_R1", "CARD_C1"]),
         "cards_r2": st(dict(base, CIMG0=54, CIMG1=55, CIMG2=56, CNAME=4, CDESC=14),
                        hearts + ["MAP", "DECK", "CARD_FACEUP", "CF2"]),
-        "notebook": st(dict(base, ANS_A=6, ANS_B=7, NOTE_T0=1, NOTE_V0=6, NOTE_T1=2, NOTE_V1=0x33CC, NOTE_T2=5,
-                            NOTE_V2=0x040F02, HINT1=3, HINT2=5),
-                       hearts + ["MAP", "NOTEBOOK", "ANSA_V", "ANSB_V", "NOTE_V0", "NOTE_V1", "NOTE_V2",
-                                 "NOTE_D0", "NOTE_E1", "NOTE_L2", "HINT_V1", "HINT_V2"]),
+        "notebook": st(dict(base, ANS_A=6, ANS_B=7, ANS_C=5, NOTE_T0=1, NOTE_T1=2, NOTE_T2=6, NOTE_T3=3,
+                            NOTE_T4=4, NOTE_T5=5, HINT1=3, HINT2=5),
+                       hearts + ["MAP", "NOTEBOOK", "ANSA_V", "ANSB_V", "ANSC_V"]
+                       + ["NOTE_V%d" % k for k in range(6)] + ["HINT_V1", "HINT_V2"]),
         "over": st(dict(base, HEARTS=0), ["MAP", "OVER", "LIGHTS"]),
         "clear": st(dict(base, CLEAR_FORM=1), ["CLEAR", "HEART1", "HEART2"], (0, 0x021, 0, (0, 0))),
     }

@@ -30,6 +30,12 @@ echo "== 3. unit tests of the shared modules"
 $IV -o sim/build/tb_units.vvp rtl/common/*.v rtl/video/vga_timing.v tb/tb_units.v
 vvp -n sim/build/tb_units.vvp | grep TB_UNITS
 
+echo "== 3b. Stage 1 answer feedback (commit / clear_feedback) vs the NEW demo_py/stage1_demo.py"
+(cd "$ROOT" && python3 -I fpga/tools/s1_feedback.py gen 2>/dev/null)
+$IV -o sim/build/tb_s1_feedback.vvp rtl/common/*.v rtl/stage1/*.v tb/tb_s1_feedback.v
+vvp -n sim/build/tb_s1_feedback.vvp > /dev/null
+(cd "$ROOT" && python3 -I fpga/tools/s1_feedback.py cmp 2>/dev/null)
+
 # Sections 4 and 5 are KNOWN to fail against the new Pygame game (docs/audit/baseline_failures.md; fixed in
 # Phase 2 / 3): they report EXPECTED FAIL and the run continues. Any other section failing still stops the run.
 EXPECTED_FAIL_MSG="EXPECTED FAIL (Phase 2/3 - see docs/audit/baseline_failures.md)"

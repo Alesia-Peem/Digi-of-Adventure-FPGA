@@ -167,6 +167,7 @@ module s1_core (
     reg [11:0] px_i, py_i; reg [3:0] px_f, py_f;
     reg [7:0]  cdesc;
     reg        e_u, e_d, e_l, e_r, e_tap, e_back;     // events of the tick being processed
+    reg [7:0]  sw_prev;                               // SW7..0 at the previous tick (F6 feedback reset)
 
     // ================================================================ shared feature modules
     reg        lf_step, lf_load; reg [15:0] lf_seed;
@@ -217,6 +218,8 @@ module s1_core (
     reg  [15:0] p3_t;                           // registered (p3 only changes on ticks)
     reg         p2_ok;                          // p2_table(T1..T3) == F888 and <= 4 literals, registered
     wire [2:0]  n_done = done[0] + done[1] + done[2] + done[3] + done[4];
+    // first stored term (" + ".join order) uses A -> the correct equation reads "AB + CD", else "CD + AB"
+    wire        p2_first_a = (p2t1[7:4] != 4'd0) ? p2t1[7] : (p2t2[7:4] != 4'd0) ? p2t2[7] : p2t3[7];
     wire [2:0]  door_n = door_layer ? 3'd5 : 3'd2;
     // speed() per tick: 6.0 px, x1.2 with form >= 1, x0.5 while slow
     wire        slow = (slow_f != 10'd0);
@@ -290,13 +293,30 @@ module s1_core (
     task say(input [7:0] id);
         begin toast <= id; toast_t <= TOAST_FRAMES; end
     endtask
-    // commit(i, correct, msg) - saves the undo record, then logs the answer
-    task commit(input [2:0] i, input correct, input [7:0] msg);
+    // "note not in notes": every Stage 1 note is a fixed text (ui_spec NOTE), so its type identifies it
+    function note_has(input [2:0] t);
+        integer k;
         begin
-            undo_v <= 1'b1; undo_i <= i; undo_a <= ans_a; undo_b <= ans_b; undo_c <= ans_c; undo_av <= ans_v;
-            undo_done <= done[i]; undo_right <= right[i];
-            done[i] <= 1'b1; right[i] <= correct;
-            cmsg <= msg; say(TOAST_NB);
+            note_has = 1'b0;
+            for (k = 0; k < 8; k = k + 1) if (k < note_n && note_t[k] == t) note_has = 1'b1;
+        end
+    endfunction
+    // commit(i, correct, ...) of the new stage1_demo.py: only a CORRECT answer is recorded.
+    //   wrong  : "INCORRECT! " + wrong_msg, toast "Incorrect - try again"; done / right / values / notes /
+    //            undo record untouched ("if not done[i]: right[i] = False" changes nothing: right <= done)
+    //   correct: undo record, done = right = 1, note appended if it is new, "CORRECT! " + correct_msg,
+    //            toast "Puzzle i+1 correct - saved to Notebook". The caller stores the value (only if correct).
+    task commit(input [2:0] i, input correct, input [7:0] okmsg, input [7:0] badmsg, input [2:0] nt);
+        begin
+            if (correct) begin
+                undo_v <= 1'b1; undo_i <= i; undo_a <= ans_a; undo_b <= ans_b; undo_c <= ans_c; undo_av <= ans_v;
+                undo_done <= done[i]; undo_right <= right[i];
+                done[i] <= 1'b1; right[i] <= 1'b1;
+                if (!note_has(nt)) note_push(nt, 24'd0);
+                cmsg <= okmsg; say(TOAST_OK1 + {5'd0, i});
+            end else begin
+                cmsg <= badmsg; say(TOAST_INC);
+            end
         end
     endtask
     task reset_stage(input full);       // reset_stage(full): everything back to the stage start
@@ -348,7 +368,7 @@ module s1_core (
         if (demo_cmd) begin dm_pend <= 1'b1; dm_op <= demo_op; dm_arg <= demo_arg; end
 
         if (rst) begin
-            q <= Q_IDLE; show_help <= 1'b1; debug <= 1'b0; dm_pend <= 1'b0; form <= 2'd0;
+            q <= Q_IDLE; show_help <= 1'b1; debug <= 1'b0; dm_pend <= 1'b0; form <= 2'd0; sw_prev <= 8'd0;
             reset_stage(1'b1);
         end else if (enter) begin
             q <= Q_IDLE; show_help <= help_on_entry; reset_stage(1'b1);
@@ -357,6 +377,11 @@ module s1_core (
             Q_IDLE: begin
                 if (gtick) begin
                     {e_u, e_d, e_l, e_r, e_tap, e_back} <= {ev_u, ev_d, ev_l, ev_r, ev_tap, ev_back};
+                    // poll(): a change of SW0-7 in the whiteboard / paper / laptop 2 close-up clears the
+                    // feedback (clear_feedback), before update() runs - in any game state
+                    sw_prev <= sw[7:0];
+                    if (mode_cu && (cur == O_WB || cur == O_PAPER || cur == O_TWOS) && sw[7:0] != sw_prev)
+                        cmsg <= CMSG_NONE;
                     cnt <= 3'd0; q <= Q_LFSR;
                 end else if (dm_pend) begin
                     dm_pend <= 1'b0; q <= Q_DEMO;
@@ -463,15 +488,15 @@ module s1_core (
                 O_WB: if (e_tap) begin                                     // puzzle 1
                     if (page == 2'd0) page <= 2'd1;
                     else begin
-                        note_push(3'd1, {20'd0, p1_val});
-                        commit(3'd0, p1_val == ANS_A, CMSG_REC);
-                        ans_a <= p1_val; ans_v[0] <= 1'b1;
+                        commit(3'd0, p1_val == ANS_A, CMSG_P1OK, CMSG_P1BAD, 3'd1);
+                        if (p1_val == ANS_A) begin ans_a <= p1_val; ans_v[0] <= 1'b1; end
                     end
                 end
                 O_PAPER: begin                                             // puzzle 2
                     if (page == 2'd0) begin if (e_tap) page <= 2'd1; end
-                    else if (e_l) p2_cur <= (p2_cur == 2'd0) ? 2'd2 : p2_cur - 2'd1;
-                    else if (e_r) p2_cur <= (p2_cur == 2'd2) ? 2'd0 : p2_cur + 2'd1;
+                    // (old keys kept: BTNL/BTNR slot, BTNC store, BTND clear, BTNU confirm)
+                    else if (e_l) begin p2_cur <= (p2_cur == 2'd0) ? 2'd2 : p2_cur - 2'd1; cmsg <= CMSG_NONE; end
+                    else if (e_r) begin p2_cur <= (p2_cur == 2'd2) ? 2'd0 : p2_cur + 2'd1; cmsg <= CMSG_NONE; end
                     else if (e_tap) begin
                         case (p2_cur) 2'd0: p2t1 <= sw[7:0]; 2'd1: p2t2 <= sw[7:0]; default: p2t3 <= sw[7:0]; endcase
                         cmsg <= CMSG_STORED; cmsg_p <= {2'd0, p2_cur} + 4'd1;
@@ -481,33 +506,33 @@ module s1_core (
                     end else if (e_u) begin
                         if (p2t1[7:4] == 4'd0 && p2t2[7:4] == 4'd0 && p2t3[7:4] == 4'd0) cmsg <= CMSG_NOTERM;
                         else begin
-                            p2_eq <= {p2t3, p2t2, p2t1};
-                            note_push(3'd2, {p2t3, p2t2, p2t1});
-                            commit(3'd1, p2_ok, CMSG_REC);
+                            p2_eq <= {p2t3, p2t2, p2t1};               // rewritten even when wrong
+                            // note "F = " + eq: a correct eq is AB + CD (type 2) or CD + AB (type 6)
+                            commit(3'd1, p2_ok, CMSG_P2OK, CMSG_P2BAD, p2_first_a ? 3'd2 : 3'd6);
                         end
                     end
                 end
                 O_NAND: begin                                              // puzzle 3
                     if (page == 2'd0) begin if (e_tap) page <= 2'd1; end
-                    else if (e_l) p3_cur <= (p3_cur == 4'd0) ? 4'd8 : p3_cur - 4'd1;
-                    else if (e_r) p3_cur <= (p3_cur == 4'd8) ? 4'd0 : p3_cur + 4'd1;
+                    else if (e_l) begin p3_cur <= (p3_cur == 4'd0) ? 4'd8 : p3_cur - 4'd1; cmsg <= CMSG_NONE; end
+                    else if (e_r) begin p3_cur <= (p3_cur == 4'd8) ? 4'd0 : p3_cur + 4'd1; cmsg <= CMSG_NONE; end
                     else if (e_u || e_d) begin
+                        cmsg <= CMSG_NONE;
                         // n = 4 if c == 8 else 4 + c // 2 ;  p3[c] = (p3[c] +- 1) % n
                         p3[3*p3_cur +: 3] <= e_u ?
                             ((p3[3*p3_cur +: 3] + 3'd1 >= p3n(p3_cur)) ? 3'd0 : p3[3*p3_cur +: 3] + 3'd1) :
                             ((p3[3*p3_cur +: 3] == 3'd0) ? p3n(p3_cur) - 3'd1 : p3[3*p3_cur +: 3] - 3'd1);
                     end else if (e_tap) begin
-                        note_push(3'd3, 24'd0);
-                        commit(3'd2, p3_t == P2_TRUTH, CMSG_CIRC);
-                        ans_b <= popcount16(p3_t); ans_v[1] <= 1'b1;
+                        // B is stored only for a correct circuit (so it is always popcount(F888) = 7)
+                        commit(3'd2, p3_t == P2_TRUTH, CMSG_P3OK, CMSG_P3BAD, 3'd3);
+                        if (p3_t == P2_TRUTH) begin ans_b <= popcount16(p3_t); ans_v[1] <= 1'b1; end
                     end
                 end
                 O_TWOS: if (e_tap) begin                                   // puzzle 4
                     if (page == 2'd0) page <= 2'd1;
                     else begin
-                        note_push(3'd4, {16'd0, p4_val});
-                        commit(3'd3, p4_val == P4_ANSWER, CMSG_VAL);
-                        ans_c <= popcount8(p4_val); ans_v[2] <= 1'b1;
+                        commit(3'd3, p4_val == P4_ANSWER, CMSG_P4OK, CMSG_P4BAD, 3'd4);
+                        if (p4_val == P4_ANSWER) begin ans_c <= popcount8(p4_val); ans_v[2] <= 1'b1; end
                     end
                 end
                 O_LIGHTSW: if (e_tap) begin
@@ -518,19 +543,19 @@ module s1_core (
                         if (e_d || e_tap) page <= (page == 2'd2) ? 2'd2 : page + 2'd1;
                         else if (e_u) page <= (page == 2'd0) ? 2'd0 : page - 2'd1;
                     end
-                    else if (e_u) p5_cur <= (p5_cur == 2'd0) ? 2'd2 : p5_cur - 2'd1;
-                    else if (e_d) p5_cur <= (p5_cur == 2'd2) ? 2'd0 : p5_cur + 2'd1;
+                    // (old keys kept: BTNU/BTND box, BTNL/BTNR letter); every key clears the feedback
+                    else if (e_u) begin p5_cur <= (p5_cur == 2'd0) ? 2'd2 : p5_cur - 2'd1; cmsg <= CMSG_NONE; end
+                    else if (e_d) begin p5_cur <= (p5_cur == 2'd2) ? 2'd0 : p5_cur + 2'd1; cmsg <= CMSG_NONE; end
                     else if (e_l || e_r) begin
+                        cmsg <= CMSG_NONE;
                         case (p5_cur)
                             2'd0: p5_0 <= l26(p5_0, e_r);
                             2'd1: p5_1 <= l26(p5_1, e_r);
                             default: p5_2 <= l26(p5_2, e_r);
                         endcase
                     end else if (e_tap) begin
-                        note_push(3'd5, {3'd0, p5_2, 3'd0, p5_1, 3'd0, p5_0});
-                        if (p5_0 == PW0 && p5_1 == PW1 && p5_2 == PW2) begin
-                            commit(3'd4, 1'b1, CMSG_GRANTED); page <= 2'd0;
-                        end else cmsg <= CMSG_BADPASS;
+                        commit(3'd4, p5_0 == PW0 && p5_1 == PW1 && p5_2 == PW2, CMSG_P5OK, CMSG_P5BAD, 3'd5);
+                        if (p5_0 == PW0 && p5_1 == PW1 && p5_2 == PW2) page <= 2'd0;
                     end
                 end
                 O_DOOR: begin                                              // door, 2 layers
@@ -782,17 +807,16 @@ module s1_core (
         C[C_DOOR_L2] = door_layer;
         C[C_CMSG_ON] = cmsg != CMSG_NONE;
         C[C_CMSG_TN] = (cmsg == CMSG_STORED) || (cmsg == CMSG_CLEARED);
+        C[C_CMSG_LONG] = (cmsg == CMSG_NOTERM) || (cmsg == CMSG_P1OK) || (cmsg == CMSG_P1BAD) ||
+                         (cmsg == CMSG_P2OK) || (cmsg == CMSG_P2BAD) || (cmsg == CMSG_P3OK) || (cmsg == CMSG_P3BAD) ||
+                         (cmsg == CMSG_P4OK) || (cmsg == CMSG_P4BAD) || (cmsg == CMSG_P5OK) || (cmsg == CMSG_P5BAD);
         C[C_CARD_FACEUP] = dk_face_up;
         C[C_CARD_R1] = dk_rnd == 2'd1;
         C[C_CAREER_V] = dk_cvalid;
         C[C_CF0] = dk_face_up && dk_face == 2'd0; C[C_CF1] = dk_face_up && dk_face == 2'd1;
         C[C_CF2] = dk_face_up && dk_face == 2'd2;
-        for (n = 0; n < 8; n = n + 1) begin
-            C[C_NOTE_V0 + n] = (n < note_n);
-            C[C_NOTE_D0 + n] = (n < note_n) && (note_t[n] == 3'd1 || note_t[n] == 3'd4);
-            C[C_NOTE_E0 + n] = (n < note_n) && (note_t[n] == 3'd2);
-            C[C_NOTE_L0 + n] = (n < note_n) && (note_t[n] == 3'd5);
-        end
+        // notes are fixed texts now (NOTE_D / NOTE_E / NOTE_L number suffixes are no longer used -> 0)
+        for (n = 0; n < 8; n = n + 1) C[C_NOTE_V0 + n] = (n < note_n);
         C[C_HINT_V0] = hint0 != 3'd0; C[C_HINT_V1] = hint1 != 3'd0; C[C_HINT_V2] = hint2 != 3'd0;
         C[C_STAGE1] = 1'b1;
         for (n = 0; n < 3; n = n + 1) begin

@@ -41,6 +41,7 @@ CONDS = (
     + ["STAGE1", "NEAR_OBJ"]
     + ["P2C%d" % i for i in range(3)] + ["P5C%d" % i for i in range(3)]
     + ["DOOR_C%d" % i for i in range(5)] + ["CARD_C%d" % i for i in range(3)]
+    + ["CMSG_LONG"]                    # close-up message drawn small and wrapped to 2 lines (commit messages)
 )
 
 # ---------------------------------------------------------------- text tables (index = id the RTL drives)
@@ -54,18 +55,34 @@ HINT_TEXT = {
     "P5": "It takes greater faith to dance in the dark than to rest in light.",
 }
 TABLES = {
-    "TOAST": [("NONE", ""), ("NB", "Notebook updated!"), ("LON", "Lights ON"), ("LOFF", "Lights OFF"),
+    "TOAST": [("NONE", ""), ("INC", "Incorrect - try again"), ("LON", "Lights ON"), ("LOFF", "Lights OFF"),
               ("ARMOR", "ARMOR PROTECTED!"), ("WRONG", "Wrong code! -1 heart"), ("ARMORP", "Armor +1"),
               ("DBG1", "[DEBUG] puzzle 1 answered"), ("DBG2", "[DEBUG] puzzle 2 answered"),
               ("DBG3", "[DEBUG] puzzle 3 answered"), ("DBG4", "[DEBUG] puzzle 4 answered"),
-              ("DBG5", "[DEBUG] puzzle 5 answered")],
+              ("DBG5", "[DEBUG] puzzle 5 answered")]
+             # commit() of a correct answer: "Puzzle %d correct - saved to Notebook" (TOAST_OK1 + i)
+             + [("OK%d" % n, "Puzzle %d correct - saved to Notebook" % n) for n in range(1, 6)],
     # CMSG with a %d parameter is split: prefix here, number, then "." (cond CMSG_TN)
-    "CMSG": [("NONE", ""), ("REC", "Answer recorded in the notebook."), ("STORED", "Stored in T"),
-             ("CLEARED", "T"), ("NOTERM", "Store at least one term first."),
-             ("CIRC", "Circuit saved in the notebook."), ("VAL", "Value recorded in the notebook."),
-             ("GRANTED", "ACCESS GRANTED"), ("BADPASS", "Incorrect passcode. Attempt logged."),
-             ("LOCK1", "LOCK 1 OPEN. Now the 5-digit lock."), ("WRONG", "WRONG CODE")],
-    "CMSG_SUFFIX": [("NONE", ""), ("REC", ""), ("STORED", "."), ("CLEARED", " cleared.")],
+    # commit(): "CORRECT! " + correct_msg / "INCORRECT! " + wrong_msg, verbatim from the puzzle handlers.
+    # Ids 2, 3, 9, 10 keep their old numbers (STORED / CLEARED / LOCK1 / WRONG are unchanged).
+    "CMSG": [("NONE", ""),
+             ("P1OK", "CORRECT! The base-conversion answer is correct. Puzzle 1 is complete."),
+             ("STORED", "Stored in T"), ("CLEARED", "T"),
+             ("NOTERM", "INCORRECT! No terms have been stored yet. Please create your K-map expression first."),
+             ("P3OK", "CORRECT! The NAND circuit produces the correct truth table. Puzzle 3 is complete."),
+             ("P4OK", "CORRECT! The two's-complement value is correct. Puzzle 4 is complete."),
+             ("P5OK", "CORRECT! ACCESS GRANTED. The login passcode is correct. Puzzle 5 is complete."),
+             ("P5BAD", "INCORRECT! ACCESS DENIED. The passcode is incorrect. Check the letters and try again."),
+             ("LOCK1", "LOCK 1 OPEN. Now the 5-digit lock."), ("WRONG", "WRONG CODE"),
+             ("P1BAD", "INCORRECT! The base-conversion answer is incorrect. Check your calculation and try again."),
+             ("P2OK", "CORRECT! Your K-map expression is correct. You can use this to solve the next puzzle."),
+             ("P2BAD", "INCORRECT! Your K-map expression is not correct. Check your variables and terms, "
+                       "then try again."),
+             ("P3BAD", "INCORRECT! The NAND circuit output does not match the required truth table. Check the "
+                       "connections and try again."),
+             ("P4BAD", "INCORRECT! The binary value is incorrect. Check the two's-complement conversion and try "
+                       "again.")],
+    "CMSG_SUFFIX": [("NONE", ""), ("P1OK", ""), ("STORED", "."), ("CLEARED", " cleared.")],
     "ITEM": [("NONE", ""), ("HINT_HARD", "Hint"), ("BOOST", "Speed Boost"), ("ARMOR", "Armor"),
              ("SHARD", "Armor Shard"), ("SLOW", "Slow"), ("HINT_SMART", "Hint"), ("FREEZE", "Freeze"),
              ("UNDO", "Undo")],
@@ -82,8 +99,12 @@ TABLES = {
     "OBJ": [("WB", "WHITEBOARD"), ("PAPER", "PAPER ON THE CABINET"), ("NAND", "LAPTOP"), ("TWOS", "LAPTOP"),
             ("SCREEN", "PROJECTOR SCREEN"), ("PC", "TEACHER COMPUTER"), ("LIGHTSW", "LIGHT SWITCH"),
             ("DOOR", "EXIT DOOR")],
-    "NOTE": [("NONE", ""), ("P1", "- P1 answer entered: "), ("P2", "- P2 answer entered: F = "),
-             ("P3", "- P3 circuit saved."), ("P4", "- P4 value entered: "), ("P5", "- P5 attempt: ")],
+    # notes of a correct commit, "- " + note (draw_notebook). Only correct answers are stored, so every note is a
+    # fixed text: A is always 6, the passcode always CPE, and a correct K-map is AB + CD in one of two orders.
+    "NOTE": [("NONE", ""), ("P1", "- P1 correct answer: A = 6"), ("P2", "- P2 correct answer: F = AB + CD"),
+             ("P3", "- P3 correct circuit: NAND-only output matches the K-map."),
+             ("P4", "- P4 correct answer: 11110100 (unsigned 244 / signed -12)."),
+             ("P5", "- P5 correct login passcode: CPE"), ("P2B", "- P2 correct answer: F = CD + AB")],
     "SRC": [("A", "A"), ("B", "B"), ("C", "C"), ("D", "D"), ("G1", "G1"), ("G2", "G2"), ("G3", "G3")],
     "CAREER": [("AIR", "AIR"), ("EARTH", "EARTH"), ("WATER", "WATER")],
     "SYMBOL": [("WING", "WING"), ("PLANE", "PLANE"), ("FART", "FART"), ("SHIP", "SHIP"), ("GEAR", "GEAR"),
