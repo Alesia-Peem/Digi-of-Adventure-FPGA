@@ -358,6 +358,7 @@ def test_scenarios_match_the_game():
     must = {"careless": {"chase"}, "skill": {"used", "retreat"}, "interview": {"interview"}, "pit": {"message 3"},
             "lift": {"message 4"}, "timeout": {"message 2"}, "restart": {"message 3", "chase"},
             "buttons": {"used", "mode 1 stage 3"}}
+    must["retreat"] = {"retreat", "used"}
     assert set(H.SCEN) == set(must) | {"plan1", "plan2", "plan3"}
     for name, wanted in sorted(must.items()):
         r = H.play(name)

@@ -729,12 +729,83 @@ def cmp(name, cols=None):
     return ok
 
 
+def _retreat():
+    """a Cloak retreat along a trail that is not flat (the reporter followed a jumping player), so the trail
+    interpolation - including a negative floor division - and the gravity fallback give different results"""
+    for seed in range(400):
+        rng = random.Random(9000 + seed)
+        stage = 1 + seed % 2
+        r = Run(stage)
+        seen = {"sloped": 0, "negative": 0}
+        real = r.m.retreat_reporter
+
+        def spy(real=real, m=r.m, seen=seen):
+            t = m.trail
+            if len(t) > 1:
+                target = min(max(m.rx - m.rdir * M.RETREAT_STEP, M.HALF_W), M.LEVEL_W - M.HALF_W)
+                k = len(t)
+                while k > 1 and (t[k - 2][0] - target) * m.rdir >= 0:
+                    k -= 1
+                if k > 1:
+                    (x0, y0, _), (x1, y1, _) = t[k - 2], t[k - 1]
+                    num, den = (y1 - y0) * (target - x0), x1 - x0
+                    if y0 != y1:
+                        seen["sloped"] += 1
+                        if (num < 0) != (den < 0) and num % den:
+                            seen["negative"] += 1
+            real()
+
+        r.m.retreat_reporter = spy
+        axis = 1
+        for t in range(3000):
+            if rng.random() < .03:
+                axis = rng.choice((1, 1, 0, -1))
+            r.step(axis, rng.random() < .08, bool(r.m.chase and not r.m.used))
+            if r.first_diff:
+                break
+        if not r.first_diff and seen["sloped"] >= 3 and seen["negative"] >= 1:
+            return r
+    raise AssertionError("no seed gives a sloped retreat")
+
+
+SCEN["retreat"] = _retreat
+
+
+def deathskill_words():
+    """2 steps per tick: skill pressed on ticks whose FIRST step dies, refuses Cloak, or ends a level clear;
+    the second step of the tick must not use the skill (review finding I1)"""
+    pit = next(c for c in range(100, 240) if not tables()[3][0][c] and not tables()[3][0][c + 1])
+    words = [CMD | OP_SEED << 12 | 0x1234 << 16, CMD | OP_STAGE << 12 | 3 << 16]
+    put = lambda x2, y2, stand: CMD | OP_PUT << 12 | (x2 | y2 << 9 | stand << 14) << 16
+    for drop in range(6):                               # fall into a pit, skill on every tick
+        words.append(put(2 * pit + 1, 2 + drop, 0))
+        words += [8] * 70
+    words.append(CMD | OP_STAGE << 12 | 1 << 16)        # stage 1, nobody chasing: Cloak refused, every tick
+    words += [8] * 60 + [2 | 8] * 400
+    words.append(put(2 * 236 + 1, 4, 1))                # walk into the S4 door with skill held on every tick
+    words += [2 | 8] * 400
+    return words
+
+
+def gen2(names):
+    """the same stimulus at 2 steps per tick (the board): sim/cr_<name>2_*"""
+    for name in names:
+        if name == "deathskill":
+            words = deathskill_words()
+        else:
+            words = [int(l, 16) for l in open(os.path.join(SIM, "cr_%s_stim.mem" % name))]
+        trace = replay(words, steps=2)
+        _write(name + "2", words, trace)
+        print("cr %-10s %6d steps (2 per tick)" % (name + "2", len(trace)))
+
+
 def play(name):
     return SCEN[name]()
 
 
-def replay(words, test_mode=0):
-    """the pure integer model (no game tie answers) on stimulus words: what cr_core.v must print, step by step"""
+def replay(words, test_mode=0, steps=1):
+    """the pure integer model (no game tie answers) on stimulus words: what cr_core.v must print, step by step.
+    steps = steps per tick (2 on the board): jump and skill count for the first step of the tick only."""
     m = model(1, physics_only=test_mode == 1)
     if test_mode == 2:
         m.no_lifts = True
@@ -759,10 +830,11 @@ def replay(words, test_mode=0):
         confirm = bool(w >> 2 & 1) or (bool(w >> 4 & 1) and m.mode == M.WIN)    # the wrapper's poll()
         if w >> 4 & 1:
             m.pause_toggle()
-        m.step((w >> 1 & 1) - (w & 1), bool(w >> 2 & 1), bool(w >> 3 & 1))
-        if confirm and m.mode == M.WIN:                                         # the wrapper's update()
-            m.confirm()
-        trace.append(m.snapshot())
+        for k in range(steps):
+            m.step((w >> 1 & 1) - (w & 1), bool(w >> 2 & 1) and k == 0, bool(w >> 3 & 1) and k == 0)
+            if k == steps - 1 and confirm and m.mode == M.WIN:                  # the wrapper's update()
+                m.confirm()
+            trace.append(m.snapshot())
     return trace
 
 
@@ -786,6 +858,8 @@ if __name__ == "__main__":
         sys.exit(0 if all([gen(n) for n in (sys.argv[2:] or list(SCEN))]) else 1)
     if cmd == ["genphys"]:
         sys.exit(gen_phys())
+    if cmd == ["gen2"]:
+        sys.exit(gen2(sys.argv[2:]))
     if cmd == ["genanimals"]:
         sys.exit(gen_animals())
     if cmd == ["genmath"]:

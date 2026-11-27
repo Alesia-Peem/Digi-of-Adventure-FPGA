@@ -23,7 +23,14 @@ module cr_tb_cosim;
     integer n, i, fd, steps, worst, t;
     // one line per step, in HEADER order; columns not built yet print 0
     reg [31:0] ex, ey, eexp; reg [63:0] eact, ealive; integer j;
+    integer xbad = 0;
     always @(posedge clk) if (step_done) begin
+        // registers that steer the sequencer or index memories must never be unknown (review finding I2)
+        if (^{dut.tr_tail, dut.tr_cnt, dut.rt_head, dut.rt_cnt, dut.lfsr, dut.mode_r, dut.stage, dut.xf, dut.yf,
+              dut.n_ents, dut.ex_v, dut.chase, dut.follow, dut.retreat, dut.interview, dut.tea_on, dut.rx, dut.ry} === 1'bx) begin
+            if (xbad < 3) $display("UNKNOWN register value at step %0d (tr_tail=%h tr_cnt=%h)", steps, dut.tr_tail, dut.tr_cnt);
+            xbad = xbad + 1;
+        end
         ex = 0; ey = 0; eexp = 0; eact = 0; ealive = 0;
         for (j = 0; j < dut.n_ents; j = j + 1) begin
             ex = ex + (j + 1) * dut.e_x[j];
@@ -68,7 +75,8 @@ module cr_tb_cosim;
         end
         repeat (3) @(posedge clk);
         $fclose(fd);
-        $display("CR_TB_COSIM: %0d words, %0d steps printed, slowest word %0d clocks", n, steps, worst);
+        $display("CR_TB_COSIM: %0d words, %0d steps printed, slowest word %0d clocks, unknown registers: %0d steps",
+                 n, steps, worst, xbad);
         $finish;
     end
 endmodule

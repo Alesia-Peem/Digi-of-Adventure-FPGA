@@ -537,7 +537,7 @@ module cr_core #(
             rt_head <= 6'd0; rt_cnt <= 7'd1;
             rt_step[0] <= 16'd0; rt_x[0] <= spawn_u; rt_y[0] <= CR_SPAWN_Y * CR_Q; rt_walk[0] <= 1'b0;
             rt_gnd[0] <= 1'b0;
-            tr_cnt <= 10'd0;
+            tr_cnt <= 10'd0; tr_tail <= 9'd0;
             ai <= 7'd0; slots <= 3'd0; contacts <= 64'd0;
             n_ents <= TEST_MODE == 1 ? 7'd0 : stage == 2'd1 ? CR_ENT_COUNT1 : stage == 2'd2 ? CR_ENT_COUNT2 : CR_ENT_COUNT3;
             st <= S_R_ENT;
@@ -954,7 +954,7 @@ module cr_core #(
         end
         S_END: begin
             step_done <= 1'b1;
-            jl <= 1'b0;
+            jl <= 1'b0; sl <= 1'b0;          // jump and skill count for the first step of a tick only
             if (steps_left > 3'd1) begin steps_left <= steps_left - 3'd1; st <= S_STEP; end
             else begin
                 if (mode_r == WIN && (tick_jump || conf_menu)) exit_r <= 1'b1;
