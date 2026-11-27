@@ -469,7 +469,9 @@ module cr_core #(
             end else if (cmd_pend) begin
                 cmd_pend <= 1'b0;
                 case (cmd_op)
-                    OP_STAGE: begin stage <= cmd_arg[1:0]; rs_msg <= 4'd0; rs_ret <= S_IDLE; st <= S_RESTART; end
+                    OP_STAGE: if (cmd_arg[1:0] != 2'd0) begin           // there is no stage 0
+                        stage <= cmd_arg[1:0]; rs_msg <= 4'd0; rs_ret <= S_IDLE; st <= S_RESTART;
+                    end
                     OP_WIN: if (mode_r == WIN) exit_r <= 1'b1;
                     OP_GOLD: gold <= 1'b1;
                     OP_PUT: begin
@@ -482,8 +484,9 @@ module cr_core #(
                     default: ;
                 endcase
             end else if (tick_pend) begin
-                tick_pend <= gtick; jump_pend <= gtick && ev_jump; skill_pend <= gtick && ev_skill;
-                menu_pend <= gtick && ev_menu;
+                tick_pend <= gtick;              // presses arriving with enter stay cancelled here too
+                jump_pend <= gtick && ev_jump && !enter; skill_pend <= gtick && ev_skill && !enter;
+                menu_pend <= gtick && ev_menu && !enter;
                 if (menu_pend && (mode_r == PLAY || mode_r == PAUSE))
                     mode_r <= mode_r == PLAY ? PAUSE : PLAY;
                 ax <= (btn_right ? 2'sd1 : 2'sd0) - (btn_left ? 2'sd1 : 2'sd0);

@@ -170,7 +170,7 @@ def test_timer_steps():
 
 plus sweeps, each asserting `worst_mm <= 1` and no `first_diff` in `(grounded, jumps, buffer>0, grace>0)`: `sweep_double_jump` (second press at every step 1..140), `sweep_coyote` (press 0..22 steps after leaving a ledge), `sweep_buffer` (press 0..22 steps before landing), `wall_push`, `head_bump`, `fast_fall_stack`, `late_double_jump_over_pit` (the ~175 m/s case).
 - [ ] **Step 2:** `python3 -I fpga/tools/cr_test_model.py` → FAIL.
-- [ ] **Step 3:** implement `move()` / `try_jump()`. Order that the grid code must keep: X pass visits rows high→low, columns left→right, then puzzle, then lifts; Y pass ends on the highest top when falling and the lowest bottom when rising. Double jump: `s = isqrt(rise<<16) + isqrt(H<<16)`, `g = ((2*s*s) << VF >> 16) // n**2`, `n = 144 - elapsed_steps`, `vy = isqrt(2*g*(rise << VF))`.
+- [ ] **Step 3:** implement `move()` / `try_jump()`. Visit order: rows high→low, columns left→right, then puzzle, then lifts (`level.solids` itself is layer-major; for landing and head bumps the order does not matter, since the pass ends on the highest top when falling and the lowest bottom when rising - the order-sensitive case is the patrol's nearest-surface tie). Double jump: `s = isqrt(rise<<16) + isqrt(H<<16)`, `g = ((2*s*s) << VF >> 16) // n**2`, `n = 144 - elapsed_steps`, `vy = isqrt(2*g*(rise << VF))`.
 - [ ] **Step 4:** run → PASS; record the worst mm per sweep.
 - [ ] **Step 5:** commit.
 

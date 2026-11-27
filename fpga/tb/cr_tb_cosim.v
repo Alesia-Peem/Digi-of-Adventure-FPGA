@@ -21,7 +21,7 @@ module cr_tb_cosim;
     reg [31:0] stim [0:262143];
     reg [1023:0] sf, of;
     integer n, i, fd, steps, worst, t;
-    // one line per step, in HEADER order; columns not built yet print 0
+    // one line per step, in HEADER order (cr_model.Model.HEADER)
     reg [31:0] ex, ey, eexp; reg [63:0] eact, ealive; integer j;
     integer xbad = 0;
     always @(posedge clk) if (step_done) begin
@@ -75,8 +75,9 @@ module cr_tb_cosim;
         end
         repeat (3) @(posedge clk);
         $fclose(fd);
-        $display("CR_TB_COSIM: %0d words, %0d steps printed, slowest word %0d clocks, unknown registers: %0d steps",
-                 n, steps, worst, xbad);
+        // plan Task 7: a step must stay far inside its budget (833 333 clocks at 2 steps per 60 Hz tick)
+        $display("CR_TB_COSIM: %0d words, %0d steps printed, slowest word %0d clocks (%0s), unknown registers: %0d steps",
+                 n, steps, worst, worst < 400000 ? "budget ok" : "OVER BUDGET", xbad);
         $finish;
     end
 endmodule

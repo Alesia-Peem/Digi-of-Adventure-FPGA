@@ -4,6 +4,7 @@
 //   3 a command arriving while a step runs is kept and applied afterwards
 //   4 a restart (STAGE) finishes within 1000 clocks, far below one tick (1 666 667 clocks)
 //   5 on the WIN screen a jump or a menu press confirms (exit_req), as Space / Enter in the hub wrapper
+//   6 a STAGE command with stage 0 is ignored (stage 0 would address beyond the level ROMs)
 `timescale 1ns/1ps
 module cr_tb_ctrl;
     reg clk = 0, rst = 1;
@@ -75,6 +76,11 @@ module cr_tb_ctrl;
         @(negedge clk) begin gtick = 0; em = 0; end
         idle;
         check(exit_req && dut.mode_r == 3, "5: menu press confirms on the WIN screen");
+        // 6
+        command(4'd1, 16'd2);
+        command(4'd2, 16'd40 | (16'd8 << 9));                       // somewhere else, 20 m
+        command(4'd1, 16'd0);                                       // stage 0 does not exist: ignored
+        check(dut.stage == 2 && dut.xf == 40 * CR_HALF_CELL, "6: STAGE 0 is ignored (no restart)");
         $display("CR_TB_CTRL: %s (%0d failed; restart took %0d clocks)", bad ? "FAIL" : "PASS", bad, t);
         $finish;
     end

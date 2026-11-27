@@ -45,6 +45,7 @@ $IV -o sim/build/cr_tb_cosim_f.vvp rtl/stage3/cr_math.v rtl/stage3/cr_core.v tb/
 for s in plan1 plan2 plan3 careless skill interview pit lift timeout restart buttons retreat; do
   vvp -n sim/build/cr_tb_cosim_f.vvp +STIM=sim/cr_${s}_stim.mem +OUT=sim/cr_${s}_rtl.txt > sim/cr_${s}_tb.log
   grep -q "unknown registers: 0 steps" sim/cr_${s}_tb.log || { echo "unknown register values in $s"; exit 1; }
+  grep -q "budget ok" sim/cr_${s}_tb.log || { echo "a step of $s is over 400 000 clocks"; exit 1; }
   (cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py cmp $s)
 done
 
@@ -55,6 +56,7 @@ $IV -Pcr_tb_cosim.STEPS=2 -o sim/build/cr_tb_cosim_f2.vvp rtl/stage3/cr_math.v r
 for s in $S2; do
   vvp -n sim/build/cr_tb_cosim_f2.vvp +STIM=sim/cr_${s}2_stim.mem +OUT=sim/cr_${s}2_rtl.txt > sim/cr_${s}2_tb.log
   grep -q "unknown registers: 0 steps" sim/cr_${s}2_tb.log || { echo "unknown register values in ${s}2"; exit 1; }
+  grep -q "budget ok" sim/cr_${s}2_tb.log || { echo "a step of ${s}2 is over 400 000 clocks"; exit 1; }
   (cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py cmp ${s}2)
 done
 

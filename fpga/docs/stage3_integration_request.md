@@ -8,7 +8,7 @@ What already exists on `stage3-campus-run` and is verified in simulation (no Viv
 
 | File | What it is | Test (`cd fpga && ./run_tests_s3.sh`) |
 |---|---|---|
-| `rtl/stage3/cr_core.v` (+ `cr_math.v`, generated `cr_consts.vh`) | the whole game logic of `onlystage_3/game.py` | bit-exact with `tools/cr_model.py` on every step of 11 scenarios (54 k steps, 52 columns) + player / animal sweeps |
+| `rtl/stage3/cr_core.v` (+ `cr_math.v`, generated `cr_consts.vh`) | the whole game logic of `onlystage_3/game.py` | bit-exact with `tools/cr_model.py` on every step of 12 scenarios (about 58 k steps, 52 columns) at 1 and 2 steps per tick + player / animal sweeps |
 | `mem/cr_*.mem`, `mem/preview/cr_*.png` | tiles, maps, sprites, collision grid, animal tables | rebuilt level image = the game's, pixel exact before colour reduction |
 | `tools/cr_assets.py` | writes all of the above | `cr_test_assets.py` |
 
@@ -34,6 +34,11 @@ cr_core #(.MEM_DIR(MEM_DIR), .STEPS_PER_TICK(2), .TEST_MODE(0)) u_cr (
 
 Campus Run's own mapping (decision D3): BTNL/BTNR move, BTNU jump, **BTNC skill**, **BTND start/pause**.
 
+`enter` cancels jump / skill / menu presses that reach the core in the same clock. A press latched by
+`input_hub` before the screen change but delivered with a later `gtick` is not cancelled, so raise `enter` in
+(or after) the `gtick` cycle that delivers the press which caused the entry, and keep `on3` low until then
+(review finding: a Stage 2 button held into Stage 3 must not act there).
+
 ### 1.1 Needed in `rtl/common/input_hub.v`: a BTNC press event
 
 `input_hub` gives BTNC only as `ev_tap` (released before 0.8 s) and `ev_back` (held 0.8 s). The skill must fire
@@ -43,7 +48,11 @@ keep using `ev_tap` / `ev_back`.
 Test: `tb_units` — a 1-clock BTNC press between two ticks gives exactly one `ev_c` in the next tick cycle and
 none in the one after.
 
-### 1.2 Commands (`demo_cmd`, one clock; applied between steps, kept while the core is busy)
+### 1.2 Commands (`demo_cmd`, one clock; applied between steps)
+
+One command at a time: a command that arrives while the core is busy is kept and applied when the step ends,
+but a second one arriving before that replaces the first. Send the next command only after `busy` is low.
+STAGE with stage 0 is ignored.
 
 | op | name | arg |
 |---|---|---|
