@@ -86,3 +86,4 @@ Task 8: dispatched (sonnet, raised one tier from R16 'easy': flash config errors
 Task 8: implemented, committed d55f132 and pushed (UNREVIEWED); agent ended without a report.
 Task 8: review — spec ✅, 1 Important (README rebuild steps), 1 minor (free flash size); both fixed in 93f851b (diff checked by controller). Task 8: complete.
 Full run_tests.sh started 2026-11-27 (log in session scratchpad full_run.log).
+Phase 0 final review (opus): ready for first Vivado run WITH FIXES. Fix wave (one agent): I1 wait for STARTUPE2.EOS; I2 retry magic while missing; I3 IOB register on dq_i + sample shift; I4 show ps_missing on an LED; minors: L16 comment, qspi_csn initial, check count==PIC_COUNT, frames12 pipefail, FLASH_BYTES/stale pictures.hex. Dispatch after full run_tests finishes (same checkout).
