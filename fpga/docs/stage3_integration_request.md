@@ -29,7 +29,9 @@ cr_core #(.MEM_DIR(MEM_DIR), .STEPS_PER_TICK(2), .TEST_MODE(0)) u_cr (
     .demo_cmd, .demo_op, .demo_arg,          // see 1.2
     .exit_req(cr_exit),                      // level-pulse: WIN screen confirmed
     .step_done(), .busy(),
-    .mode(cr_mode), .level(cr_level), .cam_px(cr_cam_px), .q_idx(pub_idx), .q_data(pub_data));
+    .mode(cr_mode), .level(cr_level), .cam_px(cr_cam_px),
+    .fields(f3), .conds(c3),                 // section 4: the screen numbers, Stage 1/2 format
+    .q_idx(fp_idx), .q_data(fp_data));       // section 4: footprint k -> {x, y, age, kind, direction, side}
 ```
 
 Campus Run's own mapping (decision D3): BTNL/BTNR move, BTNU jump, **BTNC skill**, **BTND start/pause**.
@@ -95,16 +97,16 @@ pixel is tpal[id][index], else the backdrop pixel (2.4). Water tiles also get th
 
 ### 2.1 Inputs the renderer needs from the top
 
-`cr_level[1:0]`, `cam_px32[12:0]`, `cam_frac` (2.2), `par_off[6:0]` (2.4), `time` for the bob lines
-(`render.py:109` uses `g.time*4 + b.x`; the core can publish its step counter `now`).
+`cr_level[1:0]` and, from the fields (section 4): `CAM_PX` (camera, screen px), `PAR` (backdrop parallax
+offset, px) and `NOW` (steps since the restart, for the water bob lines: `render.py:109` uses
+`g.time*4 + b.x` with `g.time` = NOW / 120 s).
 
 ### 2.2 Horizontal position — exact rule
 
-`render.py` puts every tile at `x = round((col - cam)*32)` with Python's round-half-to-even, where `cam` is
-metres. With cam in units, `cam*32 = cam/76 800`. When `cam % 76 800 == 38 400` (exactly half a pixel) tiles of
-even and odd columns round in different directions. The frame model must reproduce that; I propose the
-core publishes `cam_px32 = cam / 76 800` (floor) and the half-pixel flag, and the renderer shifts odd columns.
-**Test:** frame check pixel-exact against `render.draw_frame()` world layer at cameras covering the tie.
+`render.py` puts every tile at `x = round((col - cam)*32)` (Python round, half to even), `cam` in metres.
+Because `32*col` is always even, this equals `32*col - round(cam*32)` exactly, ties included, so the field
+**`CAM_PX` = round(cam × 32)** (section 4) is all the tile layer needs: tile column `col` starts at screen x
+`32*col - CAM_PX`. **Test:** frame check pixel-exact against `render.draw_frame()`'s world layer.
 
 ### 2.3 Vertical: 352 → 360
 
@@ -148,40 +150,44 @@ Request: type-7 entry (free once the old Stage 3 subs are removed):
 measure the worst line in the frame model (3 200 clk per line).
 **Test:** unit TB against a Python reference for sizes, flip, all four clips, alpha.
 
-## 4. Publish fields (core → `ui_composer`)
+## 4. Publish fields (core → `ui_composer`) — built, Stage 1/2 format (user decision)
 
-**Not on any port yet.** Today `cr_core` exposes only `mode`, `level`, `exit_req`, `busy`, `step_done`;
-`cam_px` and `q_data` are placeholders that stay 0. Every value in the table below exists as a register inside
-`cr_core.v` (names given), but the publisher cannot read it until this branch adds the ports. That is the next
-piece of work on this branch, and it needs one answer from you first: **the field format you want** (the
-`ui_spec.py` FIELD/COND style of Stages 1/2, or a read port `q_idx` → `q_data` per slot plus scalar outputs).
-Until then nothing of Stage 3 can be drawn.
+`cr_core` drives **`fields[3071:0]`** (field k = `fields[24*k +: 24]`, 24-bit two's complement) and
+**`conds[255:0]`** (cond k = `conds[k]`) after every step, exactly like `s1_core` / `s2_core`. The list, the
+meaning of every entry and the index constants are `tools/cr_fields.py` → generated `rtl/stage3/cr_fields.vh`
+(`CRF_<name>` / `CRC_<name>`). When the old Stage 3 is removed, point the Stage 3 part of `ui_spec.py`
+(`FIELDS3` / `CONDS3`) at `cr_fields.FIELDS_CR` / `CONDS_CR` (or import them); this branch did not edit
+`ui_spec.py` because `s3_core` still uses the old lists.
 
-Also needed on the port: `n_ents` (animals of the current level). `e_active` / `e_alive` bits at and above
-`n_ents` are left over from the previous level and must be ignored.
-
-| Field | Source | Pygame |
-|---|---|---|
-| player sprite id, x, y (screen), flip, pose, scale | `xf yf face_l walking stride grounded`, form = skill>0 ? ability : gold ? gold : gown, enlarged = `grow>0` or stage 3 | `render.py:167-199` |
-| reporter visible, x, y, flip, pose, "?" label | `rvisible rx ry rdir_l rwalking follow` | `render.py:147-166` |
-| animals (≤ 16 on screen): id = skin, x, y, flip, clip | `e_x e_y e_dl e_skin e_exp e_wl` | `render.py:129-146` |
-| lifts tops, tea x/y, "?" box opened | `lt0 lt1 tea_* opened` | `render.py:112-128` |
-| clock seconds | ⌈`time_left`/120⌉ | `hud.py:97-103` |
-| skill digit / ready / used, ability | ⌈`skill`/120⌉ capped 5, `used`, stage | `hud.py:104-114` |
-| route bar | `progress` (0..99, 100 on CLEAR/WIN), stage | `hud.py:116-130` |
-| interview card | `interview` (question = `interview <= 300`), `q0 q1` (0..14) | `hud.py:132-139` |
-| notice | `message` (ids `CR_MSG_*`), shown while `notice > 0` | `render.py:209-213` |
-| modal | `mode` PAUSE / CLEAR / WIN, stage | `hud.py:141-180` |
-
-Texts: 15 messages and 15 question pairs are English (`settings.py:65-83`, `game.py`), no Thai at run time.
+- 100 fields, 84 conds: HUD numbers (clock seconds, skill digit, progress and the route-bar fill, message id,
+  question ids and which one is shown, interview seconds), mode and stage, the player (centre x, feet y,
+  sprite id = form × pose × size, flip, cloak ghosts' x, flash ring centre), the reporter (x, y, id, flip, "?"
+  label y, wall clip columns), tea, "?" box, both lifts, 16 animal slots (sprite id, centre x, bottom y,
+  visible rows, flip, ant / goose flags) with an OVERFLOW cond, `CAM_PX`, `PAR` (backdrop parallax), `NOW`.
+- Screen positions are world-frame pixels of render.py's 640 × 352 frame (before its resize to 360 rows),
+  with Python's rounding.
+- **Footprints** (up to 72, field `PRINTS` of them, oldest first) come through the read port
+  `q_idx[6:0]` → `q_data[39:0]` = {screen x[13:0] signed, screen y[10:0], age in steps[8:0], kind[2:0],
+  direction −1, side −1, 0} (render.py adds `1 + (side > 0)` to y; `winter_art.tracks` draws them).
+- Verified: `cr_model.Model.publish()` equals the numbers render.py / hud.py compute from the float game
+  (8 966 steps; only values within 0.002 px of a rounding edge, or sprites exactly on the culling edge, may
+  differ); the RTL equals `publish()` bit for bit on every step of every full-game scenario at 1 and 2 steps per
+  tick (`run_tests_s3.sh` section 7 / 7b).
+- **Read them while `busy` is low.** `fields` / `conds` are rewritten over a few hundred clocks at the end of
+  every step and the footprint port follows the live footprint list, so the composer must sample them when
+  `busy` is low (it is low for all but a few thousand clocks of each 1 666 667-clock tick); waiting for
+  `!busy` at the start of vblank is enough.
+- Not in the fields (the renderer derives them, using `NOW` = steps since the restart): the goose bob,
+  snow / stars / wind, tea sparkles, player particles, the flash ring geometry, the footprints' fade.
+- `cam_px` = `CAM_PX`; `n_ents` is internal only now (the slots already skip dead / inactive animals).
 
 ## 4a. Visual effects (decision D2: keep all of them; ask before dropping any)
 
-None of these change the game, so neither `cr_model.py` nor `cr_core.v` models them yet.
+Footprints are game state and are now in the model and the core; the rest only need time and positions.
 
 | Effect | Pygame | State it needs | Proposal |
 |---|---|---|---|
-| Footprints of the player and walking / patrolling animals, fading over 2 s, up to 72 | `game.py:402-410` `footprint()`, `winter_art.py:15-39` `tracks` | the game's `prints` deque and `last_steps` per actor: real game state, updated every step | **decision for the user:** add it to the model and core (about 72 × (x, y, age, kind, direction, side) + one "last step" per actor), or approximate it in the publisher |
+| Footprints of the player and walking / patrolling animals, fading over 2 s, up to 72 | `game.py:402-410` `footprint()`, `winter_art.py:15-39` `tracks` | game state | **built** (user decision): exact in the model and the core, read through `q_idx` / `q_data` (section 4) |
 | Snowfall (stage 2), night stars (stage 3), wind lines (stages 1–2) | `winter_art.py:5-13`, `42-53`, `67-75` | game time (`now`), camera | generated in the renderer / publisher from `now` and `cam` |
 | Water bob lines | `render.py:108-111` | `now` | in the tile layer (section 2) |
 | Tea sparkles (7 points) | `winter_art.sparkles`, `render.py:128` | tea position, `now` | display-list points from the publisher |
@@ -194,8 +200,8 @@ line with every effect on before anything is dropped.
 
 ## 5. Build files
 
-- `vivado/create_project.tcl`: add `rtl/stage3/cr_consts.vh` to the header list (line 22); the `.mem` glob
-  already picks up `cr_*.mem`.
+- `vivado/create_project.tcl`: add `rtl/stage3/cr_consts.vh` and `rtl/stage3/cr_fields.vh` to the header
+  list (line 22); the `.mem` glob already picks up `cr_*.mem`.
 - `run_tests.sh`: nothing needed now (`cr_core.v` compiles inside section 7 and is not instantiated). When the
   old Stage 3 goes, replace section 6 with `./run_tests_s3.sh`.
 
@@ -216,13 +222,15 @@ of section 12.
 | `cr_spr` 69 861 × 4 | 9 |
 | `cr_spal` 752 × 16 | 1 |
 | `cr_edge` 34 816 × 1 (animals' float-side table, read synchronously) | 2 |
-| **Campus Run ROMs** | **42** |
+| `cr_fpexp` 16 384 × 1 (footprint expiry at exactly 2 s, read synchronously) | 1 |
+| **Campus Run ROMs** | **43** |
 | freed by removing the old Stage 3 (`s3_txt` + small ROMs) | −3 … −4 |
 
 Also inferred as LUT RAM / LUT ROM rather than BRAM (please check in the Vivado report): collision grid
-(2 × 768 × 11), animal table (192 × 213), follower paths (512 × 65), reporter trail (512 × 97) and route
-(64 × 114). The other session's latest estimate is ≈ 49 / 135 after the rooms moved to flash (Phase 0
-Task 7); with Campus Run that is ≈ 87–91 / 135 (target ≤ 120). **Unverified until your Vivado run.**
+(2 × 768 × 11), animal table (192 × 213), follower paths (512 × 65), reporter trail (512 × 97), route
+(64 × 114), footprints (128 × 117 incl. the screen x / y) and the walkers' last steps (65 × 49). The
+`fields` / `conds` registers are 3 328 flip-flops, as in Stages 1 / 2. The other session's latest estimate is ≈ 49 / 135 after the rooms moved to flash (Phase 0
+Task 7); with Campus Run that is ≈ 88–92 / 135 (target ≤ 120). **Unverified until your Vivado run.**
 
 ## 8. Timing notes for the Vivado run
 

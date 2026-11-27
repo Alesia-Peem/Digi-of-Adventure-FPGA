@@ -364,6 +364,44 @@ def test_footprints_follow_the_game():
     done(seen)
 
 
+def test_publish_matches_render():
+    """Model.publish() = the numbers render.py / hud.py draw with, on every step of several scenarios"""
+    import cr_fields as CF
+    compared = ties = edge_steps = 0
+    for name in ("skill", "interview", "lift", "careless", "retreat", "pit"):
+        run = H.Run(1)
+        words = [int(l, 16) for l in open(os.path.join(H.SIM, "cr_%s_stim.mem" % name))][1:]
+        for w in words:
+            run.word(w)
+            gf, gc, near = H.render_fields(run.g)
+            mf, mc = run.m.publish()
+            gq, mq = gf.pop("_Q"), run.m.q_words()
+            assert len(gq) == len(mq), "%s step %d: footprints %d/%d" % (name, run.t, len(gq), len(mq))
+            for k, (a, b) in enumerate(zip(gq, mq)):
+                if a != b:
+                    assert "FP%d" % k in near, "%s step %d: footprint %d render=%x model=%x" % (name, run.t, k, a, b)
+                    ties += 1
+            culled = lambda k: ((k[0] == "A" or k == "OVERFLOW") and "SLOTS" in near) or k[:2] in near
+            if any(culled(k) for k in set(gf) | set(mf) | set(gc) | set(mc)):
+                edge_steps += 1
+            gf = {k: v for k, v in gf.items() if not culled(k)}
+            mf = {k: v for k, v in mf.items() if not culled(k)}
+            gc = {k: v for k, v in gc.items() if not culled(k)}
+            mc = {k: v for k, v in mc.items() if not culled(k)}
+            for k in set(gf) | set(mf):
+                if k in CF.FIELD and gf.get(k, 0) != mf.get(k, 0):
+                    tie = k in near or (k.startswith("A") and k[k.index("_"):] in ("_Y", "_X", "_ROWS")
+                                        and ("A" + k[k.index("_"):]) in near)
+                    assert tie, "%s step %d: %s render=%s model=%s" % (name, run.t, k, gf.get(k), mf.get(k))
+                    ties += 1
+            assert gc == mc, "%s step %d: conds render-only %s model-only %s" % (
+                name, run.t, sorted(set(gc) - set(mc)), sorted(set(mc) - set(gc)))
+            compared += 1
+            assert not run.first_diff, run.first_diff
+    print("      %d steps of screen numbers compared, %d float ties, %d steps with a sprite on the culling edge" %
+          (compared, ties, edge_steps))
+
+
 # ---------------- scenarios (also the RTL stimulus) ----------------
 def test_routes_clear_every_level():
     for stage in (1, 2, 3):

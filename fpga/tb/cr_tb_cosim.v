@@ -10,19 +10,20 @@ module cr_tb_cosim;
     reg clk = 0, rst = 1;
     always #5 clk = ~clk;
     reg gtick = 0, bl = 0, br = 0, ej = 0, es = 0, em = 0, enter = 0, dcmd = 0;
-    reg [3:0] dop = 0; reg [15:0] darg = 0;
-    wire busy, step_done, exit_req; wire [2:0] mode; wire [1:0] level; wire [12:0] cam_px; wire [31:0] q_data;
+    reg [3:0] dop = 0; reg [15:0] darg = 0; reg [6:0] q_idx = 0;
+    wire busy, step_done, exit_req; wire [2:0] mode; wire [1:0] level; wire [12:0] cam_px; wire [39:0] q_data;
+    wire [3071:0] fields; wire [255:0] conds;
     cr_core #(.MEM_DIR("mem/"), .STEPS_PER_TICK(STEPS), .TEST_MODE(PHYS)) dut (
         .clk(clk), .rst(rst), .gtick(gtick), .btn_left(bl), .btn_right(br), .ev_jump(ej), .ev_skill(es),
         .ev_menu(em), .enter(enter), .demo_cmd(dcmd), .demo_op(dop), .demo_arg(darg), .exit_req(exit_req),
-        .step_done(step_done), .busy(busy), .mode(mode), .level(level), .cam_px(cam_px), .q_idx(6'd0),
-        .q_data(q_data));
+        .step_done(step_done), .busy(busy), .mode(mode), .level(level), .cam_px(cam_px), .fields(fields),
+        .conds(conds), .q_idx(q_idx), .q_data(q_data));
 
     reg [31:0] stim [0:262143];
-    reg [1023:0] sf, of;
+    reg [1023:0] sf, of, pf; integer fp, qdump;
     integer n, i, fd, steps, worst, t;
     // one line per step, in HEADER order (cr_model.Model.HEADER)
-    reg [31:0] ex, ey, eexp, fx, fy, fm; reg [63:0] eact, ealive; integer j, fk;
+    reg [31:0] ex, ey, eexp, fx, fy, fm; reg [63:0] eact, ealive; integer j, fk; reg [39:0] qs, qw; reg [13:0] qa;
     integer xbad = 0;
     always @(posedge clk) if (step_done) begin
         // registers that steer the sequencer or index memories must never be unknown (review finding I2)
@@ -58,15 +59,32 @@ module cr_tb_cosim;
         end
         $fdisplay(fd, "%0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d", dut.lfsr, ex, ey, eact, ealive, eexp, dut.contacts,
                   dut.fp_cnt, fx, fy, fm);
+        // publish: fields, conds and the footprint port read back through q_idx (cr_cosim.py cmppub)
+        qs = 0;
+        for (j = 0; j < dut.fp_cnt; j = j + 1) begin
+            if (STEPS == 1) begin       // through the port: the core is idle now (1 ps steps, timescale 1ns/1ps)
+                q_idx = j; #0.001;
+                qw = q_data;
+            end else begin              // 2 steps per tick: the core is already in the next step - same word
+                fk = (dut.fp_head + j) % 128;   // from the registers, read in this clock
+                qa = dut.now - dut.fp_t[fk];
+                qw = {dut.fp_sx[fk], dut.fp_sy[fk], qa[8:0], dut.fp_k[fk], dut.fp_dl[fk], dut.fp_sn[fk], 1'b0};
+            end
+            qs = qs + (j + 1) * qw;
+            if (steps == qdump) $display("QDUMP %0d %h t=%0d now=%0d st=%0d", j, qw, dut.fp_t[(dut.fp_head + j) % 128], dut.now, dut.st);
+        end
+        $fdisplay(fp, "%0d %h %h %h", steps, fields, conds, qs);
         steps = steps + 1;
     end
     initial begin
         if (!$value$plusargs("STIM=%s", sf)) sf = "sim/cr_phys_stim.mem";
         if (!$value$plusargs("OUT=%s", of)) of = "sim/cr_phys_rtl.txt";
+        if (!$value$plusargs("PUB=%s", pf)) pf = "sim/cr_pub_rtl.txt";
+        if (!$value$plusargs("QDUMP=%d", qdump)) qdump = -1;
         for (i = 0; i < 262144; i = i + 1) stim[i] = 32'hFFFFFFFF;
         $readmemh(sf, stim);
         n = 0; while (n < 262144 && stim[n] !== 32'hFFFFFFFF) n = n + 1;
-        fd = $fopen(of, "w"); steps = 0; worst = 0;
+        fd = $fopen(of, "w"); fp = $fopen(pf, "w"); steps = 0; worst = 0;
         repeat (5) @(posedge clk); @(negedge clk) rst = 0;
         repeat (5) @(posedge clk);
         for (i = 0; i < n; i = i + 1) begin
@@ -82,7 +100,7 @@ module cr_tb_cosim;
             if (t > worst) worst = t;
         end
         repeat (3) @(posedge clk);
-        $fclose(fd);
+        $fclose(fd); $fclose(fp);
         // plan Task 7: a step must stay far inside its budget (833 333 clocks at 2 steps per 60 Hz tick)
         $display("CR_TB_COSIM: %0d words, %0d steps printed, slowest word %0d clocks (%0s), unknown registers: %0d steps",
                  n, steps, worst, worst < 400000 ? "budget ok" : "OVER BUDGET", xbad);

@@ -10,13 +10,14 @@ module cr_tb_ctrl;
     reg clk = 0, rst = 1;
     always #5 clk = ~clk;
     reg gtick = 0, ej = 0, es = 0, em = 0, enter = 0, dcmd = 0;
-    reg [3:0] dop = 0; reg [15:0] darg = 0;
-    wire busy, step_done, exit_req; wire [2:0] mode; wire [1:0] level; wire [12:0] cam_px; wire [31:0] q_data;
+    reg [3:0] dop = 0; reg [15:0] darg = 0; reg [6:0] q_idx = 0;
+    wire busy, step_done, exit_req; wire [2:0] mode; wire [1:0] level; wire [12:0] cam_px; wire [39:0] q_data;
+    wire [3071:0] fields; wire [255:0] conds;
     cr_core #(.MEM_DIR("mem/"), .STEPS_PER_TICK(2)) dut (
         .clk(clk), .rst(rst), .gtick(gtick), .btn_left(1'b0), .btn_right(1'b0), .ev_jump(ej), .ev_skill(es),
         .ev_menu(em), .enter(enter), .demo_cmd(dcmd), .demo_op(dop), .demo_arg(darg), .exit_req(exit_req),
-        .step_done(step_done), .busy(busy), .mode(mode), .level(level), .cam_px(cam_px), .q_idx(6'd0),
-        .q_data(q_data));
+        .step_done(step_done), .busy(busy), .mode(mode), .level(level), .cam_px(cam_px), .fields(fields),
+        .conds(conds), .q_idx(q_idx), .q_data(q_data));
 `include "cr_consts.vh"
     integer bad = 0, t;
     task check; input ok; input [8*48-1:0] what;

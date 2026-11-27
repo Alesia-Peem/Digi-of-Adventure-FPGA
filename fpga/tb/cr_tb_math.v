@@ -5,9 +5,9 @@ module cr_tb_math;
     reg clk = 0, rst = 1;
     always #5 clk = ~clk;
     reg start = 0; reg [1:0] op = 0; reg [79:0] a = 0, b = 0;
-    wire busy, done; wire [79:0] result;
+    wire busy, done; wire [79:0] result, rem;
     cr_math dut (.clk(clk), .rst(rst), .start(start), .op(op), .a(a), .b(b), .busy(busy), .done(done),
-                 .result(result));
+                 .result(result), .rem(rem));
     reg [247:0] vec [0:4095];
     integer n, i, bad, longest, t;
     initial begin
@@ -22,6 +22,10 @@ module cr_tb_math;
             t = 1;
             while (!done) begin @(negedge clk); t = t + 1; if (t > 200) begin $display("FAIL vector %0d: no done", i); $finish; end end
             if (t > longest) longest = t;
+            if (op == 2'd1 && b != 0 && rem !== a - result * b) begin
+                if (bad < 5) $display("FAIL vector %0d: remainder of %h / %h = %h", i, a, b, rem);
+                bad = bad + 1;
+            end
             if (result !== vec[i][79:0]) begin
                 if (bad < 5) $display("FAIL vector %0d op %0d: a=%h b=%h want %h got %h", i, op, a, b, vec[i][79:0], result);
                 bad = bad + 1;

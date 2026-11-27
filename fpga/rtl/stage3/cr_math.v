@@ -1,6 +1,6 @@
 // cr_math.v - shared sequential arithmetic for cr_core.v, 80-bit unsigned, one bit per clock.
 //   op 0: result = a * b       (low 80 bits; cr_core only asks for products that fit)
-//   op 1: result = a / b       floor; b = 0 gives all ones (never asked)
+//   op 1: result = a / b       floor; b = 0 gives all ones (never asked); rem = a % b
 //   op 2: result = isqrt(a)    floor square root (b ignored)
 // `start` for one clock; `done` pulses for one clock when `result` is valid; it stays valid until the next start.
 // At most 81 clocks. Python reference: a * b, a // b, math.isqrt(a) (tools/cr_cosim.py genmath).
@@ -14,7 +14,8 @@ module cr_math (
     input  wire [79:0] b,
     output reg         busy,
     output reg         done,
-    output reg  [79:0] result
+    output reg  [79:0] result,
+    output wire [79:0] rem
 );
     reg [1:0]  o;
     reg [6:0]  n;           // bits left
@@ -29,6 +30,7 @@ module cr_math (
     wire        sq_take  = {1'b0, x} >= trial_sq;
     wire [80:0] sq_next  = sq_take ? (r >> 1) + {1'b0, bit2} : (r >> 1);
     wire        div_take = y != 80'd0 && trial_div >= {1'b0, y};
+    assign rem = r[79:0];                // after a division: the remainder (valid with done)
 
     always @(posedge clk) begin
         done <= 1'b0;

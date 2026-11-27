@@ -33,6 +33,7 @@ def tables():
             for e, edges in zip(ents, A.edge_bits(s)):
                 e["nskins"] = len(A.skins(s)[e["species"]])
                 e["edges"] = edges
+                e["skin_ids"] = [animal_sprite_id(n) for n in A.skins(s)[e["species"]]]
             _tables[s] = A.grid(L) + (ents,)
     return _tables
 
@@ -48,6 +49,113 @@ class Shim:
     def sample(self, seq, k):
         assert k == 2
         return [seq[i] for i in self.lfsr.pair(len(seq))]
+
+
+animal_sprite_id = A.animal_sprite_id
+
+
+def render_fields(g):
+    """the screen numbers render.py / hud.py compute from the FLOAT game state (cr_fields.py names), and the set
+    of fields whose float value sat within 1e-6 of a rounding edge (a model difference there is a float tie)"""
+    import cr_fields as CF
+    cam, near = g.camera, set()
+
+    def rnd(name, v):                    # Python round(), as render.py
+        # positions may differ from the model by up to 0.04 mm = 0.0013 px: within 0.002 px of an edge is a tie
+        if abs(v % 1 - .5) < .002:
+            near.add(name)
+        return round(v)
+
+    def flo(name, v):                    # int() of a positive value
+        if abs(v - round(v)) < 1e-6:
+            near.add(name)
+        return int(v)
+
+    X = lambda name, pos: rnd(name, (pos - cam) * 32)
+    Y = lambda name, pos: rnd(name, 352 - pos * 32)
+    F, Cd = {}, {}
+    p, r = g.p, g.reporter
+    digit = g.cloak_digit
+    F.update(CAM_PX=rnd("CAM_PX", cam * 32), PAR=rnd("PAR", 64 * cam / max(1, g.level.width - 20)),
+             NOW=round(g.time * 120), TIME_S=max(0, ceil(g.remaining)), SKILL_D=digit, PROGRESS=g.progress,
+             ROUTE_FULL=g.progress // 4, ROUTE_PART=max(0, min(9, round((g.progress / 4 - g.progress // 4) * 9))),
+             MSG=MESSAGES[g.message], Q0=C.QUESTIONS.index(g.questions[0]) if g.questions else 0,
+             Q1=C.QUESTIONS.index(g.questions[1]) if g.questions else 0, INT_S=ceil(g.interview - 1e-12),
+             FLASH=round(g.flash * 120), STAGE=g.stage, PRINTS=len(g.prints))
+    q = []                                             # the footprint port, as winter_art.tracks places prints
+    for k, (wx, wy, born, kind, d, side) in enumerate(g.prints):
+        sx = max(-8192, min(8191, X("FP%d" % k, wx)))
+        q.append(CF.q_word(sx, Y("FP%d" % k, wy), round((g.time - born) * 120), KINDS[kind], d, side))
+    F["_Q"] = q
+    if g.mode not in ("clear", "win"):                 # the accepted "progress boundary" tie (option A)
+        v = 100 * (p_x := g.p.x - g.spawn[0]) / (g.door.x - g.spawn[0])
+        if abs(v - round(v)) < 1e-6:
+            near.update(("PROGRESS", "ROUTE_FULL", "ROUTE_PART"))
+    Cd.update(PLAY=g.mode == "play", PAUSE=g.mode == "pause", CLEAR=g.mode == "clear", WIN=g.mode == "win",
+              NOTICE=g.mode == "play" and not g.interview > 0 and g.notice > 0 and bool(g.message),
+              INTERVIEW=g.mode == "play" and g.interview > 0, QSEL=bool(g.question_index) and g.interview > 0,
+              SKILL_USED=g.skill_used and not digit, PHASE=g.stage == 3)
+    form = (g.ability if g.skill > 0 else "gold" if g.gold else "gown")
+    pose = (0, 1, 0, 2)[flo("P_ID", p.stride * 2.2) % 4] if p.walking else 0
+    if not p.grounded:
+        pose = 1
+    enlarged = g.time < g.tea_growth_until or (g.stage == 3 and g.gold)
+    base = {"gown": 0, "cloak": 6 if enlarged else 3, "gold": 12 if enlarged else 9, "phase": 15}[form]
+    F.update(P_X=X("P_X", p.x), P_Y=Y("P_Y", p.y), P_ID=base + pose, P_CY=Y("P_CY", p.y + 1))
+    for i in (1, 2, 3):
+        F["G%d_X" % i] = X("G%d_X" % i, p.x - p.direction * .14 * i)
+    Cd.update(P_FLIP=p.direction < 0, P_CLOAK=form == "cloak")
+    shown = bool(g.reporter_visible and (g.chase or g.cloak_follow or g.interview or g.retreat_left))
+    Cd.update(R_ON=shown, R_FLIP=shown and r.direction < 0, R_LABEL=shown and g.cloak_follow > 0)
+    if shown:
+        rpose = flo("R_ID", g.time * 7) % 2 if g.reporter_walking and not g.interview > 0 else 0
+        left = X("R_X", r.x) - 16
+        low, high = 0, 32
+        for b in g.blocks:
+            if b.y >= r.y + C.REPORTER_HEIGHT or b.y + b.h <= r.y:
+                continue
+            if b.x <= r.x - .5 < b.x + b.w:
+                low = max(low, X("R_CL", b.x + b.w) - left)
+            elif b.x < r.x + .5 <= b.x + b.w:
+                high = min(high, X("R_CH", b.x) - left)
+        F.update(R_X=X("R_X", r.x), R_Y=Y("R_Y", r.y), R_ID=18 + rpose, R_LY=Y("R_LY", r.y + 1.95), R_CL=low,
+                 R_CH=high)
+    Cd.update(TEA_ON=g.tea is not None, OPENED=bool(g.opened), PUZ_ON=g.stage == 2)
+    if g.tea:
+        F.update(TEA_X=X("TEA_X", g.tea.x), TEA_Y=Y("TEA_Y", g.tea.y))
+    if g.stage == 2:
+        F.update(PUZ_X=X("PUZ_X", g.puzzle.x + .5), PUZ_Y=Y("PUZ_Y", g.puzzle.y))
+    for k, lift in enumerate(g.lifts):
+        on = cam - 2 <= lift.box.x <= cam + 20
+        if min(abs(lift.box.x - cam + 2), abs(lift.box.x - cam - 20)) < 1e-6:
+            near.add("L%d" % k)              # exactly on the culling edge (off screen either way)
+        Cd["L%d_ON" % k] = on
+        if on:
+            F.update({"L%d_X" % k: X("L%d_X" % k, lift.box.x), "L%d_Y" % k: Y("L%d_Y" % k, lift.top)})
+    slot = 0
+    for e in g.enemies:
+        if e.active and e.alive and min(abs(e.x - cam + 1), abs(e.x - cam - 21)) < 1e-6:
+            near.add("SLOTS")                # an animal exactly on the culling edge (off screen either way)
+        if not (e.active and e.alive and cam - 1 <= e.x <= cam + 21):
+            continue
+        pop = e.motion == "pop"
+        if pop:
+            rows, y = rnd("A_ROWS", 27 * e.exposure), Y("A_Y", e.base_y)
+        else:
+            y = Y("A_Y", e.y)
+            rows = 27 if e.waterline is None else max(0, min(27, Y("A_ROWS", e.waterline) - (y - 27)))
+        if not rows:
+            continue
+        if slot == CF.N_SLOTS:
+            Cd["OVERFLOW"] = True
+            break
+        orientation = 1 if e.species == "goose" else -e.direction
+        F.update({"A%d_ID" % slot: animal_sprite_id(e.skin), "A%d_X" % slot: X("A_X", e.x), "A%d_Y" % slot: y,
+                  "A%d_ROWS" % slot: rows})
+        Cd.update({"A%d_V" % slot: True, "A%d_F" % slot: orientation < 0, "A%d_POP" % slot: pop,
+                   "A%d_FLY" % slot: e.motion == "fly"})
+        slot += 1
+    return F, {k: v for k, v in Cd.items() if v}, near
 
 
 def original(stage, physics_only=False, seed=M.SEED):
@@ -665,8 +773,11 @@ def gen_animals(steps=8000):
     print("cr animals   %6d steps, %d words" % (len(r.trace), len(r.words)))
 
 
-def _write(name, words, trace):
+def _write(name, words, trace, pub=None):
     os.makedirs(SIM, exist_ok=True)
+    if pub is not None:
+        with open(os.path.join(SIM, "cr_%s_pub_expect.txt" % name), "w") as f:
+            f.writelines("%d %s\n" % (i, line) for i, line in enumerate(pub))
     with open(os.path.join(SIM, "cr_%s_stim.mem" % name), "w") as f:
         f.writelines("%08X\n" % w for w in words)
     with open(os.path.join(SIM, "cr_%s_expect.txt" % name), "w") as f:
@@ -809,8 +920,34 @@ def gen2(names):
         else:
             words = [int(l, 16) for l in open(os.path.join(SIM, "cr_%s_stim.mem" % name))]
         trace = replay(words, steps=2)
-        _write(name + "2", words, trace)
+        _write(name + "2", words, trace, replay.pub)
         print("cr %-10s %6d steps (2 per tick)" % (name + "2", len(trace)))
+
+
+def cmp_pub(name):
+    """RTL publish (fields, conds, footprint port) vs Model.publish(), every step"""
+    import cr_fields as CF
+    e = [l.split() for l in open(os.path.join(SIM, "cr_%s_pub_expect.txt" % name))]
+    g = [l.split() for l in open(os.path.join(SIM, "cr_%s_pub.txt" % name))]
+    fname = {v: k for k, v in CF.FIELD.items()}
+    cname = {v: k for k, v in CF.COND.items()}
+    bad = 0
+    for a, b in zip(e, g):
+        if a == b:
+            continue
+        if bad < 4:
+            fa, fb, ca, cb = int(a[1], 16), int(b[1], 16), int(a[2], 16), int(b[2], 16)
+            d = ["F %s model=%d rtl=%d" % (fname.get(k, k), fa >> 24 * k & 0xFFFFFF, fb >> 24 * k & 0xFFFFFF)
+                 for k in range(128) if (fa ^ fb) >> 24 * k & 0xFFFFFF]
+            d += ["C %s model=%d rtl=%d" % (cname.get(k, k), ca >> k & 1, cb >> k & 1) for k in range(256)
+                  if (ca ^ cb) >> k & 1]
+            if a[3] != b[3]:
+                d.append("footprint port sum model=%s rtl=%s" % (a[3], b[3]))
+            print("  step %s: %s" % (a[0], "; ".join(d[:6])))
+        bad += 1
+    bad += len(e) != len(g)
+    print("CR PUBLISH %s: %s (%d steps, %d differing)" % (name, "PASS" if not bad else "FAIL", len(e), bad))
+    return not bad
 
 
 def play(name):
@@ -820,12 +957,15 @@ def play(name):
 def replay(words, test_mode=0, steps=1):
     """the pure integer model (no game tie answers) on stimulus words: what cr_core.v must print, step by step.
     steps = steps per tick (2 on the board): jump and skill count for the first step of the tick only."""
-    m = model(1, physics_only=test_mode == 1)
+    # the hardware after reset: one restart at stage 1 drawing the skins from 0xACE1 (cr_core S_RESTART)
+    m = M.Model(tables()) if test_mode == 0 else model(1, physics_only=test_mode == 1)
     if test_mode == 2:
         m.no_lifts = True
         m.hit = lambda: None
         m.restart()
     trace = []
+    pub = []
+    replay.pub = pub                                   # the publish lines of the last replay (_write uses them)
     for w in words:
         if w & CMD:
             op, arg = w >> 12 & 15, w >> 16
@@ -849,6 +989,7 @@ def replay(words, test_mode=0, steps=1):
             if k == steps - 1 and confirm and m.mode == M.WIN:                  # the wrapper's update()
                 m.confirm()
             trace.append(m.snapshot())
+            pub.append(m.pub_line())
     return trace
 
 
@@ -860,7 +1001,8 @@ def gen(name):
     words = [CMD | OP_SEED << 12 | r.seed_q << 16] + r.words
     if name.startswith("plan"):
         words = plan_pure(int(name[-1]))
-    _write(name, words, replay(words))
+    trace = replay(words)
+    _write(name, words, trace, replay.pub)
     print("cr %-10s %6d steps: %s  (worst %.3f mm, %d ties)" %
           (name, r.t, "PASS" if not r.first_diff else "DIFF " + r.first_diff, r.worst, len(r.ties)))
     return not r.first_diff
@@ -878,6 +1020,8 @@ if __name__ == "__main__":
         sys.exit(gen_animals())
     if cmd == ["genmath"]:
         sys.exit(gen_math())
+    if cmd == ["cmppub"]:
+        sys.exit(0 if all([cmp_pub(n) for n in sys.argv[2:]]) else 1)
     if cmd == ["cmp"]:
         cols = sys.argv[3:] or None
         if cols == ["phys"]:

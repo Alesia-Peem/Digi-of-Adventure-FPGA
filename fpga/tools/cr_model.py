@@ -124,6 +124,12 @@ def print_expired(t0, now):
     return now - t0 > 240 or (now - t0 == 240 and EXPIRE_240[t0])
 
 
+def rhe(num, den):
+    """Python's round(num / den) (half to even), exactly, den > 0"""
+    q, r = divmod(num, den)
+    return q + (2 * r > den or (2 * r == den and q % 2 == 1))
+
+
 class Lfsr16:
     """fpga/rtl/common/lfsr16.v. A draw advances it 16 times so consecutive draws share no bits."""
 
@@ -162,6 +168,7 @@ class Animal:
         self.waterline = None
         self.path = deque()              # follower: the leader's last 61 (x, y, direction)
         self.edges, self.marks = e["edges"], 0     # cr_assets.edge_bits()
+        self.skin_ids = e.get("skin_ids", [0] * 8)  # sprite id of each skin (cr_assets.sprite_images order)
 
 
 COYOTE = timer_steps(.15, 0)
@@ -288,6 +295,100 @@ class Model:
             sy = (sy + (k + 1) * y) & 0xFFFFFFFF
             meta = (meta + (k + 1) * (t * 64 + kind * 4 + (d > 0) * 2 + (side > 0))) & 0xFFFFFFFF
         return n, sx, sy, meta
+
+    # ---------------- publish (cr_fields.py): the screen numbers, exact integer rounding ----------------
+    def publish(self):
+        import cr_fields as CF
+        cam = self.cam
+        X = lambda num, den=76800: rhe(num - cam * (den // 76800), den)            # round((pos - cam) * 32)
+        Y = lambda num, den=76800: 352 - rhe(num, den)                              # round(352 - pos * 32)
+        XF = lambda xf: X(xf, 76800 * F)
+        YF = lambda yf: Y(yf, 76800 * F)
+        digit = self.skill_digit
+        F_, C_ = {}, {}
+        F_.update(CAM_PX=rhe(cam, 76800), PAR=rhe(64 * cam, 230 * Q), NOW=self.now, TIME_S=self.seconds,
+                  SKILL_D=digit, PROGRESS=self.progress, ROUTE_FULL=self.progress // 4,
+                  ROUTE_PART=(0, 2, 4, 7)[self.progress % 4], MSG=self.message,
+                  Q0=self.questions[0] if self.questions else 0, Q1=self.questions[1] if self.questions else 0,
+                  INT_S=(self.interview + 119) // 120, FLASH=self.flash, STAGE=self.stage, PRINTS=len(self.prints))
+        C_.update(PLAY=self.mode == PLAY, PAUSE=self.mode == PAUSE, CLEAR=self.mode == CLEAR, WIN=self.mode == WIN,
+                  NOTICE=self.mode == PLAY and not self.interview and self.notice > 0 and self.message != 0,
+                  INTERVIEW=self.mode == PLAY and self.interview > 0,
+                  QSEL=self.interview > 0 and bool(self.question_index), SKILL_USED=self.used and not digit,
+                  PHASE=self.stage == 3)
+        form = (3 if self.stage == 3 else 1) if self.skill > 0 else 2 if self.gold else 0   # gown cloak gold phase
+        pose = (0, 1, 0, 2)[self.stride * 11 // (5 * Q * F) % 4] if self.walking else 0
+        if not self.grounded:
+            pose = 1
+        enlarged = self.grow > 0 or (self.stage == 3 and self.gold)
+        base = (0, 6 if enlarged else 3, 12 if enlarged else 9, 15)[form]
+        F_.update(P_X=XF(self.xf), P_Y=YF(self.yf), P_ID=base + pose, P_CY=YF(self.yf + Q * F))
+        for i in (1, 2, 3):
+            F_["G%d_X" % i] = XF(self.xf - self.facing * 344064 * i * F)                # 0.14 m
+        C_.update(P_FLIP=self.facing < 0, P_CLOAK=form == 1)
+        shown = self.rvisible and bool(self.chase or self.follow or self.interview or self.retreat)
+        C_.update(R_ON=shown, R_FLIP=shown and self.rdir < 0, R_LABEL=shown and self.follow > 0)
+        if shown:
+            rpose = self.now * 7 // 120 % 2 if self.rwalking and not self.interview else 0
+            rx_s = X(self.rx)
+            low, high = 0, 32
+            for bx, by, bw, bh in self.blocks_units(self.rx - 2 * Q, self.rx + 2 * Q):
+                if by * F >= self.ry + PH * F or (by + bh) * F <= self.ry:
+                    continue
+                if bx <= self.rx - Q // 2 < bx + bw:
+                    low = max(low, X(bx + bw) - rx_s + 16)
+                elif bx < self.rx + Q // 2 <= bx + bw:
+                    high = min(high, X(bx) - rx_s + 16)
+            F_.update(R_X=rx_s, R_Y=YF(self.ry), R_ID=18 + rpose, R_LY=YF(self.ry + 4792320 * F), R_CL=low,
+                      R_CH=high)
+        C_.update(TEA_ON=self.tea is not None, OPENED=self.opened, PUZ_ON=self.stage == 2)
+        if self.tea:
+            F_.update(TEA_X=X(self.tea[0]), TEA_Y=Y(self.tea[1]))
+        if self.stage == 2:
+            F_.update(PUZ_X=X(PUZZLE_X + Q // 2), PUZ_Y=Y(PUZZLE_Y))
+        for k, lift in enumerate(self.lifts):
+            bx = (lift[0] - 1) * Q
+            on = cam - 2 * Q <= bx <= cam + 20 * Q
+            C_["L%d_ON" % k] = on
+            if on:
+                F_.update({"L%d_X" % k: X(bx), "L%d_Y" % k: Y(lift[1])})
+        slot = 0
+        for e in self.ents:
+            if not (e.active and e.alive and cam - Q <= e.x <= cam + 21 * Q):
+                continue
+            pop = e.motion == POP
+            if pop:
+                rows, y = rhe(27 * e.exposure, ANT_RAMP), Y(e.base_y)
+            else:
+                y = Y(e.y)
+                rows = 27 if e.waterline is None else max(0, min(27, Y(e.waterline) - (y - 27)))
+            if not rows:
+                continue
+            if slot == CF.N_SLOTS:
+                C_["OVERFLOW"] = True
+                break
+            F_.update({"A%d_ID" % slot: e.skin_ids[e.skin], "A%d_X" % slot: X(e.x), "A%d_Y" % slot: y,
+                       "A%d_ROWS" % slot: rows})
+            C_.update({"A%d_V" % slot: True, "A%d_F" % slot: e.species != 3 and e.direction > 0,
+                       "A%d_POP" % slot: pop, "A%d_FLY" % slot: e.motion == FLY})
+            slot += 1
+        return F_, {k: v for k, v in C_.items() if v}
+
+    def q_words(self):
+        """the footprint read port, oldest first (cr_fields.q_word)"""
+        import cr_fields as CF
+        out = []
+        for x, y, t, kind, d, side in self.prints:
+            sx = max(-8192, min(8191, rhe(x - self.cam, 76800)))
+            out.append(CF.q_word(sx, 352 - rhe(y, 76800), self.now - t, kind, d, side))
+        return out
+
+    def pub_line(self):
+        """one line of cr_<name>_pub_expect.txt: fields, conds, weighted sum of the footprint read port"""
+        import cr_fields as CF
+        fv, cv = CF.pack(*self.publish())
+        qs = sum((k + 1) * w for k, w in enumerate(self.q_words())) & 0xFFFFFFFFFF
+        return "%0768x %064x %010x" % (fv, cv, qs)
 
     def teleport(self, x, y, grounded):
         self.xf, self.yf, self.vyf, self.grounded = x * F, y * F, 0, grounded

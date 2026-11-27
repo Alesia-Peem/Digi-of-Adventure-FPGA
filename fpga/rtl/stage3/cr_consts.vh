@@ -192,3 +192,39 @@ localparam [2:0] CR_SPAWN_X1 = 6;
 localparam [2:0] CR_SPAWN_X2 = 5;
 localparam [2:0] CR_SPAWN_X3 = 6;
 localparam [2:0] CR_SPAWN_Y = 3;
+function [5:0] cr_skin_id;
+    input [1:0] lvl; input [1:0] species; input [2:0] skin;
+    begin
+        cr_skin_id = 6'd0;
+        case ({lvl, species, skin})
+            8'b00000000: cr_skin_id = 6'd20;
+            8'b00000001: cr_skin_id = 6'd21;
+            8'b00000010: cr_skin_id = 6'd22;
+            8'b00000011: cr_skin_id = 6'd23;
+            8'b00001000: cr_skin_id = 6'd24;
+            8'b00001001: cr_skin_id = 6'd25;
+            8'b00010000: cr_skin_id = 6'd26;
+            8'b00100000: cr_skin_id = 6'd27;
+            8'b00100001: cr_skin_id = 6'd28;
+            8'b00100010: cr_skin_id = 6'd29;
+            8'b00100011: cr_skin_id = 6'd30;
+            8'b00100100: cr_skin_id = 6'd22;
+            8'b00100101: cr_skin_id = 6'd23;
+            8'b00101000: cr_skin_id = 6'd31;
+            8'b00101001: cr_skin_id = 6'd25;
+            8'b00110000: cr_skin_id = 6'd32;
+            8'b00111000: cr_skin_id = 6'd33;
+            8'b00111001: cr_skin_id = 6'd34;
+            8'b01000000: cr_skin_id = 6'd35;
+            8'b01000001: cr_skin_id = 6'd36;
+            8'b01000010: cr_skin_id = 6'd22;
+            8'b01000011: cr_skin_id = 6'd23;
+            8'b01001000: cr_skin_id = 6'd37;
+            8'b01001001: cr_skin_id = 6'd25;
+            8'b01010000: cr_skin_id = 6'd38;
+            8'b01011000: cr_skin_id = 6'd39;
+            8'b01011001: cr_skin_id = 6'd34;
+            default: cr_skin_id = 6'd0;
+        endcase
+    end
+endfunction

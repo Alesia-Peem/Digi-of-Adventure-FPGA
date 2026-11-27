@@ -6,7 +6,9 @@
 // PUT (Task 7); the animals - patrol, follower, walk + water, fly, pop - and their contact test (Task 8); the
 // reporter (chase, interview, cloak follow, retreat), the skills Cloak and Phase, the lifts, the "?" box and
 // the milk tea, the doors, level clear / win, near-finish message, progress, commands SEED / WIN / GOLD (Task 9);
-// footprints of the player and of walking / patrolling animals, up to 72, each fading 2 s after it was made.
+// footprints of the player and of walking / patrolling animals, up to 72, each fading 2 s after it was made
+// (Task 11); after every step the screen numbers of tools/cr_fields.py on fields / conds and the footprint read
+// port q_idx -> q_data (Task 12), equal to cr_model.Model.publish() / q_words().
 //
 // Numbers (cr_model.py): 1 m = Q = 600*4096 units; player x / y / speeds / gravity carry 8 more fraction bits
 // ("F units"). The grid is visited in the game's list order - rows top to bottom, columns left to right, then
@@ -47,18 +49,21 @@ module cr_core #(
     output wire        busy,
     output wire [2:0]  mode,
     output wire [1:0]  level,
-    output reg  [12:0] cam_px,
-    input  wire [5:0]  q_idx,
-    output wire [31:0] q_data
+    output reg  [12:0] cam_px,           // = field CAM_PX (rounded camera, world px)
+    output wire [3071:0] fields,         // cr_fields.py: field k = fields[24*k +: 24]
+    output wire [255:0]  conds,          //               cond k  = conds[k]
+    input  wire [6:0]  q_idx,            // footprint k (0 = oldest) of field PRINTS
+    output wire [39:0] q_data            // cr_fields.q_word
 );
 `include "cr_consts.vh"
+`include "cr_fields.vh"
 
     localparam PLAY = 2'd0, PAUSE = 2'd1, CLEAR = 2'd2, WIN = 2'd3;
     localparam OP_STAGE = 4'd1, OP_PUT = 4'd2, OP_SEED = 4'd3, OP_WIN = 4'd4, OP_GOLD = 4'd5;
     localparam M_MUL = 2'd0, M_DIV = 2'd1, M_SQRT = 2'd2;
     // what the box walker does with each box
     localparam W_XPASS = 4'd0, W_YPASS = 4'd1, W_REACH = 4'd2, W_WATER = 4'd3, W_BLOCK = 4'd4, W_PLACE = 4'd5,
-               W_TEA = 4'd6, W_RPUSH = 4'd7, W_RTOPS = 4'd8;
+               W_TEA = 4'd6, W_RPUSH = 4'd7, W_RTOPS = 4'd8, W_RCLIP = 4'd9;
 
     // ---------------- the level grid: one 11-bit word per column, bit r = world row r ----------------
     reg [10:0] solid_rom [0:767];
@@ -192,7 +197,25 @@ module cr_core #(
     assign mode = {1'b0, mode_r};
     assign level = stage;
     assign exit_req = exit_r;
-    assign q_data = 32'd0;
+    // publish (Task 12)
+    reg [3071:0] F_r;
+    reg [255:0]  C_r;
+    assign fields = F_r;
+    assign conds = C_r;
+    reg [5:0]  pj;                       // publish job
+    reg [6:0]  pslot, pk;
+    reg signed [79:0] rh_n, rh_a;
+    reg [79:0] rh_d, rh_q0;
+    reg        rh_neg, rh_fast;
+    reg [4:0]  rh_sh;
+    reg signed [47:0] rh_q, cam_r, rx_s, pa_y, rc_low, rc_high;
+    reg [6:0]  rh_ret;
+    reg [5:0]  pa_rows;
+    reg signed [13:0] fp_sx [0:127];
+    reg signed [10:0] fp_sy [0:127];
+    wire [6:0] q_slot = fp_head + q_idx;
+    wire [13:0] q_age = now - fp_t[q_slot];
+    assign q_data = {fp_sx[q_slot], fp_sy[q_slot], q_age[8:0], fp_k[q_slot], fp_dl[q_slot], fp_sn[q_slot], 1'b0};
 
     // ---------------- sequencer ----------------
     localparam S_IDLE = 7'd0, S_RESTART = 7'd1, S_STEP = 7'd2, S_MOVE0 = 7'd3, S_M1 = 7'd4, S_M2 = 7'd5,
@@ -211,7 +234,10 @@ module cr_core #(
                S_RT6 = 7'd75, S_RT7 = 7'd76, S_RT8 = 7'd77, S_RT9 = 7'd78, S_PL0 = 7'd79, S_PL1 = 7'd80,
                S_PL2 = 7'd81, S_W_USE2 = 7'd82, S_DRAW = 7'd83, S_R_ENT2 = 7'd84, S_H1A = 7'd85, S_H1B = 7'd86,
                S_W_USE3 = 7'd87, S_W_USE4 = 7'd88, S_ACM = 7'd89, S_FPP = 7'd90, S_FPP2 = 7'd91, S_FW = 7'd92,
-               S_REST1 = 7'd93, S_AC1 = 7'd94;
+               S_REST1 = 7'd93, S_AC1 = 7'd94, S_PUB0 = 7'd95, S_PJ = 7'd96, S_PJW = 7'd97, S_RH0 = 7'd98,
+               S_RH1 = 7'd99, S_RHQ = 7'd100, S_RHR = 7'd101, S_PCL = 7'd102, S_PCL1 = 7'd103, S_PA1 = 7'd104,
+               S_PA2 = 7'd105, S_PA3 = 7'd106, S_PA4 = 7'd107, S_PA5 = 7'd108, S_PA6 = 7'd109, S_PP1 = 7'd110,
+               S_PP2 = 7'd111, S_PP3 = 7'd112;
     reg [6:0] st, tj_ret, w_ret, m_ret, rs_ret, prog_ret, hit_ret, fo_ret, rq_ret, pl_ret, dr_ret, fp_ret;
     reg [3:0] dr_n;                      // draw(): shifts left
 
@@ -388,11 +414,58 @@ module cr_core #(
     wire signed [47:0] fp_age = $signed({34'd0, now}) - $signed({34'd0, fp_t[fp_head]});
     wire signed [47:0] r_tgt_raw = rdir_l ? rx + CR_RETREAT_STEP : rx - CR_RETREAT_STEP;
 
+    // ---------------- publish helpers ----------------
+    wire m_busy, m_done; wire [79:0] m_res, m_rem;                           // cr_math (instance below)
+    localparam signed [47:0] PX_D = 48'sd76800, PX_DF = 48'sd19660800;      // Q/32 and Q*F/32: 1 screen px
+    localparam signed [47:0] STRIDE_D = 5 * CR_Q * 256;                     // stride * 2.2 = stride * 11 / (5 Q F)
+    function [20:0] div75w;              // floor(n / 75), exact for n < 2^21
+        input [20:0] n;
+        reg [40:0] p;
+        begin
+            p = n * 20'd894785;
+            div75w = p[40:26];
+        end
+    endfunction
+    function signed [47:0] setv;         // a 24-bit field value
+        input signed [47:0] v;
+        begin
+            setv = v;
+        end
+    endfunction
+    wire [79:0] rh_shifted = rh_a >> rh_sh;
+    wire [79:0] rh_qm = rh_fast ? {59'd0, div75w(rh_shifted[20:0])} : 80'd0;
+    wire [79:0] rh_rem = rh_fast ? rh_a - rh_q0 * (80'd75 << rh_sh) : m_rem;
+    wire        rh_up = (rh_rem << 1) > rh_d || ((rh_rem << 1) == rh_d && rh_q0[0]);
+    wire        r_shown = rvisible && (chase || follow != 7'd0 || interview != 10'd0 || retreat != 8'd0);
+    wire [1:0]  form = skill != 10'd0 ? (stage == 2'd3 ? 2'd3 : 2'd1) : gold ? 2'd2 : 2'd0;
+    wire        enlarged = grow != 9'd0 || (stage == 2'd3 && gold);
+    wire [4:0]  p_base = form == 2'd0 ? 5'd0 : form == 2'd1 ? (enlarged ? 5'd6 : 5'd3)
+                       : form == 2'd2 ? (enlarged ? 5'd12 : 5'd9) : 5'd15;
+    wire [20:0] now7 = now * 7;
+    wire [40:0] now7d = now7 * 20'd139811;                                  // floor(now * 7 / 120)
+    // ceil(n / 120) = (n + 119) * 139811 >> 24, exact below 2^17
+    wire [47:0] skill_m = ({38'd0, skill} + 48'd119) * 48'd139811;
+    wire [47:0] time_m  = ({34'd0, time_left} + 48'd119) * 48'd139811;
+    wire [47:0] int_m   = ({38'd0, interview} + 48'd119) * 48'd139811;
+    wire [23:0] skill_c = skill_m[47:24], time_c = time_m[47:24], int_c = int_m[47:24];
+    wire [2:0]  skill_d = !(mode_r == PLAY || mode_r == PAUSE) ? 3'd0 : skill_c > 5 ? 3'd5 : skill_c[2:0];
+    wire [6:0]  progress_v = (mode_r == CLEAR || mode_r == WIN) ? 7'd100 : prog;
+    wire        l0_on = lifts_on && cam - 2 * CR_Q <= 162 * CR_Q && 162 * CR_Q <= cam + 20 * CR_Q;
+    wire        l1_on = lifts_on && cam - 2 * CR_Q <= 207 * CR_Q && 207 * CR_Q <= cam + 20 * CR_Q;
+    // a block edge at whole metres e: x(e) = 32 e - CAM_PX exactly (32 e is even, so rounding commutes)
+    wire signed [47:0] ux_r = ux + uw;
+    wire signed [47:0] xe_l = 32 * $signed({27'd0, div75w(ux[35:15])}) - cam_r;
+    wire signed [47:0] xe_r = 32 * $signed({27'd0, div75w(ux_r[35:15])}) - cam_r;
+    // the animal being published
+    wire signed [47:0] pe_x = {{16{e_x[ai[5:0]][31]}}, e_x[ai[5:0]]};
+    wire signed [47:0] pe_y = {{16{e_y[ai[5:0]][31]}}, e_y[ai[5:0]]};
+    wire pe_vis = e_active[ai] && e_alive[ai] && cam - CR_Q <= pe_x && pe_x <= cam + 21 * CR_Q;
+    wire [6:0] pf = fp_head + pk;
+
     // ---------------- arithmetic unit ----------------
     reg m_start; reg [1:0] m_op; reg [79:0] m_a, m_b;
-    wire m_busy, m_done; wire [79:0] m_res;
     cr_math u_math (.clk(clk), .rst(rst), .start(m_start), .op(m_op), .a(m_a), .b(m_b), .busy(m_busy),
-                    .done(m_done), .result(m_res));
+                    .done(m_done), .result(m_res), .rem(m_rem));
 
     // double jump working values
     reg [7:0]  dj_n;
@@ -449,6 +522,20 @@ module cr_core #(
         input signed [47:0] tx; input signed [47:0] ty; input behind; input [6:0] next;
         begin
             pl_tx <= tx; pl_ty <= ty; pl_behind <= behind; have_prev <= 1'b0; pl_ret <= next; st <= S_PL0;
+        end
+    endtask
+
+    task rhe;                            // rh_q = round(n / d), half to even (Python round), d > 0
+        input signed [79:0] n; input [79:0] d; input [6:0] next;
+        begin
+            rh_n <= n; rh_d <= d; rh_ret <= next; st <= S_RH0;
+        end
+    endtask
+
+    task setf;                           // field idx = v
+        input integer idx; input signed [47:0] v;
+        begin
+            F_r[idx * 24 +: 24] <= v[23:0];
         end
     endtask
 
@@ -782,7 +869,145 @@ module cr_core #(
             end
             st <= S_END0;
         end
-        S_END0: begin prog_ret <= S_END; st <= S_PR0; end
+        S_END0: begin prog_ret <= S_PUB0; st <= S_PR0; end
+
+        // ---------------- publish (cr_model.publish): the screen numbers, then the footprint port -------
+        S_PUB0: begin
+            F_r <= 3072'd0; C_r <= 256'd1;
+            setf(CRF_NOW, {34'd0, now}); setf(CRF_TIME_S, time_c[23:0]); setf(CRF_SKILL_D, {45'd0, skill_d});
+            setf(CRF_PROGRESS, {41'd0, progress_v}); setf(CRF_ROUTE_FULL, {43'd0, progress_v[6:2]});
+            setf(CRF_ROUTE_PART, progress_v[1:0] == 2'd0 ? 0 : progress_v[1:0] == 2'd1 ? 2 : progress_v[1:0] == 2'd2 ? 4 : 7);
+            setf(CRF_MSG, {44'd0, message}); setf(CRF_Q0, {44'd0, q0}); setf(CRF_Q1, {44'd0, q1});
+            setf(CRF_INT_S, int_c[23:0]); setf(CRF_FLASH, {42'd0, flash}); setf(CRF_STAGE, {46'd0, stage});
+            setf(CRF_PRINTS, {41'd0, fp_cnt});
+            C_r[CRC_PLAY] <= mode_r == PLAY; C_r[CRC_PAUSE] <= mode_r == PAUSE;
+            C_r[CRC_CLEAR] <= mode_r == CLEAR; C_r[CRC_WIN] <= mode_r == WIN;
+            C_r[CRC_NOTICE] <= mode_r == PLAY && interview == 10'd0 && notice != 9'd0 && message != 4'd0;
+            C_r[CRC_INTERVIEW] <= mode_r == PLAY && interview != 10'd0;
+            C_r[CRC_QSEL] <= interview != 10'd0 && interview <= CR_T_INTERVIEW / 2;
+            C_r[CRC_SKILL_USED] <= used && skill_d == 3'd0; C_r[CRC_PHASE] <= stage == 2'd3;
+            C_r[CRC_P_FLIP] <= face_l; C_r[CRC_P_CLOAK] <= form == 2'd1;
+            C_r[CRC_R_ON] <= r_shown; C_r[CRC_R_FLIP] <= r_shown && rdir_l; C_r[CRC_R_LABEL] <= r_shown && follow != 7'd0;
+            C_r[CRC_TEA_ON] <= tea_on; C_r[CRC_OPENED] <= opened; C_r[CRC_PUZ_ON] <= stage == 2'd2;
+            C_r[CRC_L0_ON] <= l0_on; C_r[CRC_L1_ON] <= l1_on;
+            if (r_shown) setf(CRF_R_ID, 18 + ((rwalking && interview == 10'd0) ? {47'd0, now7d[24]} : 48'sd0));
+            pj <= 6'd0; st <= S_PJ;
+        end
+        S_PJ: begin                      // one rounded screen number per job
+            case (pj)
+                6'd0:  rhe(cam, PX_D, S_PJW);
+                6'd1:  rhe(64 * cam, 230 * CR_Q, S_PJW);
+                6'd2:  rhe(xf - (cam <<< 8), PX_DF, S_PJW);
+                6'd3:  rhe(yf, PX_DF, S_PJW);
+                6'd4:  rhe(yf + (CR_Q <<< 8), PX_DF, S_PJW);
+                6'd5, 6'd6, 6'd7:
+                       rhe(xf - (cam <<< 8) + (face_l ? 1 : -1) * $signed({42'd0, pj - 6'd4}) * (48'sd344064 <<< 8),
+                           PX_DF, S_PJW);
+                6'd8:  start_math(M_DIV, {32'd0, stride} * 80'd11, {32'd0, STRIDE_D}, S_PJW);
+                6'd9:  if (r_shown) rhe(rx - cam, PX_D, S_PJW); else pj <= 6'd12;
+                6'd10: rhe(ry, PX_DF, S_PJW);
+                6'd11: rhe(ry + (48'sd4792320 <<< 8), PX_DF, S_PJW);
+                6'd12: if (tea_on) rhe(tea_x - cam, PX_D, S_PJW); else pj <= 6'd14;
+                6'd13: rhe(tea_y, PX_D, S_PJW);
+                6'd14: if (stage == 2'd2) rhe(240 * CR_Q + CR_HALF_QU - cam, PX_D, S_PJW); else pj <= 6'd16;
+                6'd15: rhe(5 * CR_Q, PX_D, S_PJW);
+                6'd16: if (l0_on) rhe(162 * CR_Q - cam, PX_D, S_PJW); else pj <= 6'd18;
+                6'd17: rhe(lt0, PX_D, S_PJW);
+                6'd18: if (l1_on) rhe(207 * CR_Q - cam, PX_D, S_PJW); else pj <= 6'd20;
+                6'd19: rhe(lt1, PX_D, S_PJW);
+                default: if (r_shown) begin  // reporter wall clip (render.py:154-164)
+                        rc_low <= 0; rc_high <= 32;
+                        walk(W_RCLIP, (rx - CR_THREE_Q) <<< 8, (rx + CR_THREE_Q) <<< 8, S_PCL1);
+                    end else begin ai <= 7'd0; pslot <= 7'd0; st <= S_PA1; end
+            endcase
+        end
+        S_PJW: begin
+            case (pj)
+                6'd0:  begin cam_r <= rh_q; cam_px <= rh_q[12:0]; setf(CRF_CAM_PX, rh_q); end
+                6'd1:  setf(CRF_PAR, rh_q);
+                6'd2:  setf(CRF_P_X, rh_q);
+                6'd3:  setf(CRF_P_Y, 352 - rh_q);
+                6'd4:  setf(CRF_P_CY, 352 - rh_q);
+                6'd5:  setf(CRF_G1_X, rh_q);
+                6'd6:  setf(CRF_G2_X, rh_q);
+                6'd7:  setf(CRF_G3_X, rh_q);
+                6'd8:  setf(CRF_P_ID, p_base + (!grounded ? 1 : !walking ? 0 : m_res[1:0] == 2'd1 ? 1 : m_res[1:0] == 2'd3 ? 2 : 0));
+                6'd9:  begin rx_s <= rh_q; setf(CRF_R_X, rh_q); end
+                6'd10: setf(CRF_R_Y, 352 - rh_q);
+                6'd11: setf(CRF_R_LY, 352 - rh_q);
+                6'd12: setf(CRF_TEA_X, rh_q);
+                6'd13: setf(CRF_TEA_Y, 352 - rh_q);
+                6'd14: setf(CRF_PUZ_X, rh_q);
+                6'd15: setf(CRF_PUZ_Y, 352 - rh_q);
+                6'd16: setf(CRF_L0_X, rh_q);
+                6'd17: setf(CRF_L0_Y, 352 - rh_q);
+                6'd18: setf(CRF_L1_X, rh_q);
+                default: setf(CRF_L1_Y, 352 - rh_q);
+            endcase
+            pj <= pj + 6'd1; st <= S_PJ;
+        end
+        S_PCL1: begin
+            setf(CRF_R_CL, rc_low); setf(CRF_R_CH, rc_high);
+            ai <= 7'd0; pslot <= 7'd0; st <= S_PA1;
+        end
+        // round(n / d): d = 1 px (76 800 units or 76 800 * 256 F units) has a fast path, the rest the divider
+        S_RH0: begin
+            rh_neg <= rh_n < 0; rh_a <= rh_n < 0 ? -rh_n : rh_n;
+            rh_fast <= rh_d == PX_D || rh_d == PX_DF; rh_sh <= rh_d == PX_DF ? 5'd18 : 5'd10;
+            st <= S_RH1;
+        end
+        S_RH1: if (rh_fast) begin rh_q0 <= rh_qm; st <= S_RHR; end
+               else start_math(M_DIV, rh_a, rh_d, S_RHQ);
+        S_RHQ: begin rh_q0 <= m_res; st <= S_RHR; end
+        S_RHR: begin
+            rh_q <= rh_neg ? -$signed(rh_q0[47:0] + rh_up) : $signed(rh_q0[47:0] + rh_up);
+            st <= rh_ret;
+        end
+        // the drawn animals, list order, into slots 0..15
+        S_PA1: begin
+            if (ai == n_ents) begin pk <= 7'd0; st <= S_PP1; end
+            else if (!pe_vis) ai <= ai + 7'd1;
+            else if (ent_motion == POP) rhe(27 * $signed({73'd0, e_exp[ai[5:0]]}), 120, S_PA2);
+            else rhe(pe_y, PX_D, S_PA3);
+        end
+        S_PA2: begin                     // an ant: the rows above its log (none: not drawn)
+            pa_rows <= rh_q[5:0];
+            if (rh_q == 0) begin ai <= ai + 7'd1; st <= S_PA1; end
+            else rhe(ent_base, PX_D, S_PA4);
+        end
+        S_PA3: begin                     // standing on y; a sinking walker shows only the rows above the water
+            pa_y <= 352 - rh_q;
+            pa_rows <= e_wl[ai[5:0]] == 4'd0 ? 6'd27
+                     : (rh_q + 27 - 32 * $signed({44'd0, e_wl[ai[5:0]]}) < 0) ? 6'd0
+                     : (rh_q + 27 - 32 * $signed({44'd0, e_wl[ai[5:0]]}) > 27) ? 6'd27
+                     : rh_q[5:0] + 6'd27 - {e_wl[ai[5:0]], 5'd0};
+            st <= S_PA5;
+        end
+        S_PA4: begin pa_y <= 352 - rh_q; st <= S_PA5; end
+        S_PA5: begin
+            if (pa_rows == 6'd0) begin ai <= ai + 7'd1; st <= S_PA1; end
+            else if (pslot == 7'd16) begin C_r[CRC_OVERFLOW] <= 1'b1; pk <= 7'd0; st <= S_PP1; end
+            else rhe(pe_x - cam, PX_D, S_PA6);
+        end
+        S_PA6: begin
+            F_r[(CRF_A0_ID + 4 * pslot) * 24 +: 24] <= {18'd0, cr_skin_id(lvl, ent_species, e_skin[ai[5:0]])};
+            F_r[(CRF_A0_X + 4 * pslot) * 24 +: 24] <= rh_q[23:0];
+            F_r[(CRF_A0_Y + 4 * pslot) * 24 +: 24] <= pa_y[23:0];
+            F_r[(CRF_A0_ROWS + 4 * pslot) * 24 +: 24] <= {18'd0, pa_rows};
+            C_r[CRC_A0_V + 4 * pslot] <= 1'b1;
+            C_r[CRC_A0_F + 4 * pslot] <= ent_species != 2'd3 && !e_dl[ai[5:0]];
+            C_r[CRC_A0_POP + 4 * pslot] <= ent_motion == POP;
+            C_r[CRC_A0_FLY + 4 * pslot] <= ent_motion == FLY;
+            pslot <= pslot + 7'd1; ai <= ai + 7'd1; st <= S_PA1;
+        end
+        // the footprint port: screen x / y of every print
+        S_PP1: if (pk == fp_cnt) st <= S_END;
+               else rhe(fp_x[pf] - cam, PX_D, S_PP2);
+        S_PP2: begin
+            fp_sx[pf] <= rh_q < -8192 ? -14'sd8192 : rh_q > 8191 ? 14'sd8191 : rh_q[13:0];
+            rhe(fp_y[pf], PX_D, S_PP3);
+        end
+        S_PP3: begin fp_sy[pf] <= 352 - rh_q; pk <= pk + 7'd1; st <= S_PP1; end
         S_PR0: begin                     // progress = 100 * (x - spawn) // (door - spawn), 0..99
             if (px_u - spawn_u <= 0) begin prog <= 7'd0; st <= prog_ret; end
             else start_math(M_DIV, {32'd0, prog_num}, {32'd0, span}, S_PR1);
@@ -1136,6 +1361,13 @@ module cr_core #(
                              && rp_y < uy + uh - CR_TOL_Y && rp_y + CR_PH > uy + CR_TOL_Y) begin
                     if (!rdir_l) begin if (ux + uw + CR_HALF_W > rx) rx <= ux + uw + CR_HALF_W; end
                     else if (ux - CR_HALF_W < rx) rx <= ux - CR_HALF_W;
+                end
+                W_RCLIP: if (!(by >= ry + CR_PH_F || by + bh <= ry)) begin
+                    if (ux <= rx - CR_HALF_QU && rx - CR_HALF_QU < ux + uw) begin
+                        if (xe_r - rx_s + 16 > rc_low) rc_low <= xe_r - rx_s + 16;
+                    end else if (ux < rx + CR_HALF_QU && rx + CR_HALF_QU <= ux + uw) begin
+                        if (xe_l - rx_s + 16 < rc_high) rc_high <= xe_l - rx_s + 16;
+                    end
                 end
                 default: if (rx + CR_HALF_W > ux + CR_TOL_X && rx - CR_HALF_W < ux + uw - CR_TOL_X
                              && ry <= by + bh && by + bh <= r_prev + CR_TIE_F && (!rt_have || by + bh > rt_best)) begin

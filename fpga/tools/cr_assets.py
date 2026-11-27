@@ -445,9 +445,27 @@ def write_consts():
     for k, (name, w, h) in enumerate(sprite_images()):
         ident = "%s_%dX%d" % (os.path.splitext(name)[0], w, h)
         lines.append("localparam CR_SPR_%s = %d;" % (ident.upper(), k))
-    lines += model_consts()
+    lines += model_consts() + skin_function()
     with open(VH, "w") as f:
         f.write("\n".join(lines) + "\n")
+
+
+def animal_sprite_id(name):
+    """index of an animal sprite in sprite_images() (all animals are 27 px high)"""
+    return next(i for i, (n, w, h) in enumerate(sprite_images()) if n == name and h == 27)
+
+
+def skin_function():
+    """cr_skin_id(level 0..2, species, skin index) -> sprite id, as Verilog"""
+    out = ["function [5:0] cr_skin_id;", "    input [1:0] lvl; input [1:0] species; input [2:0] skin;",
+           "    begin", "        cr_skin_id = 6'd0;", "        case ({lvl, species, skin})"]
+    for stage in (1, 2, 3):
+        for sp, names in skins(stage).items():
+            for k, n in enumerate(names):
+                out.append("            8'b%s: cr_skin_id = 6'd%d;" % (
+                    format((stage - 1) << 5 | SPECIES.index(sp) << 3 | k, "08b"), animal_sprite_id(n)))
+    out += ["            default: cr_skin_id = 6'd0;", "        endcase", "    end", "endfunction"]
+    return out
 
 
 def model_consts():
