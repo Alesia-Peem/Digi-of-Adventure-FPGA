@@ -12,12 +12,13 @@ Written 2026-11-27. Check git and the ledger first; they are newer than this fil
 Never work in the other stream's folder or edit its files.
 `HANDOFF.md` is the Stage 3 prompt (already given to the second account; do not send it twice).
 
-## State when this was written
+## State (updated 2026-11-27, after Phase 0)
 
-- Phase 0 Tasks 1-7: done and reviewed, on GitHub.
-- Task 8 (flash script, README steps, STATUS page): committed and pushed (`d55f132`), **not reviewed** yet.
-- After Task 8: one review of the whole Phase 0 branch.
-- Stage 3: second account has tools, model and player physics RTL commits, **not pushed to GitHub**.
+- Phase 0 (Tasks 1-8 + final review fixes, `0e33200`) is done and reviewed. Full `run_tests.sh` exits 0;
+  only sections 4 and 5 fail, as expected.
+- Stage 3: pushed as `stage3-campus-run`. The second account was also merging it into its own copy of
+  `port-new-game`; check `git fetch && git log origin/port-new-game` before working or pushing.
+- Stage 3 is not wired into the renderer or top level yet.
 - Stage 1 and 2 still follow the old game. No Vivado, timing or board result exists.
 
 ## For the person taking over
@@ -46,12 +47,9 @@ First find the real state, before changing anything:
 Then tell me the state in a few simple lines.
 
 Next work, in order:
-1. Task 8 (commit d55f132): review it against task-8-brief.md and ruling R17, unless the
-   ledger says that is already done.
-2. One review of all of Phase 0 (git diff 732a793..HEAD, code only) and fix real findings,
-   including the deferred minors in the ledger that matter.
-3. Run cd fpga && ./run_tests.sh (full, not quick; it has not been run since Task 5).
-4. Then Phase 1 (shared cards, inventory, handoff). Write its detailed plan first.
+1. git fetch; if origin/port-new-game has the Stage 3 merge, merge it and run the tests.
+2. Run cd fpga && ./run_tests.sh (full) and ./run_tests_s3.sh if present.
+3. Phase 1 (shared cards, inventory, handoff). Write its detailed plan first.
 
 Another Claude account is working on Stage 3 in ~/Digi-of-Adventure-FPGA, branch
 stage3-campus-run. Do not edit that folder, fpga/rtl/stage3 or cr_* files.

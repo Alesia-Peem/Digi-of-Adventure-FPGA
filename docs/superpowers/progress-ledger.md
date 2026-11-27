@@ -87,3 +87,6 @@ Task 8: implemented, committed d55f132 and pushed (UNREVIEWED); agent ended with
 Task 8: review — spec ✅, 1 Important (README rebuild steps), 1 minor (free flash size); both fixed in 93f851b (diff checked by controller). Task 8: complete.
 Full run_tests.sh started 2026-11-27 (log in session scratchpad full_run.log).
 Phase 0 final review (opus): ready for first Vivado run WITH FIXES. Fix wave (one agent): I1 wait for STARTUPE2.EOS; I2 retry magic while missing; I3 IOB register on dq_i + sample shift; I4 show ps_missing on an LED; minors: L16 comment, qspi_csn initial, check count==PIC_COUNT, frames12 pipefail, FLASH_BYTES/stale pictures.hex. Dispatch after full run_tests finishes (same checkout).
+Final fix wave: complete (dc25db4..0e33200, opus). Full run_tests.sh EXIT 0 (only sections 4/5 expected-fail). Scoped re-review: all findings addressed, no new Critical/Important.
+Final: minor (deferred): flash_model stale-hex check only catches a hex SHORTER than SIZE. Switch-selectable sample phase not done (optional; all switches used).
+Phase 0 COMPLETE (simulation only; no Vivado/board result). Next: Phase 1 detailed plan. Stage 3 session merged its branch into ITS local port-new-game (5dd9110), not pushed at this time.
