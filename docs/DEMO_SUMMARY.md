@@ -4,7 +4,8 @@
 
 We are porting our Pygame game to Verilog for the Digilent Nexys A7-100T with VGA output. The game
 was updated during the project, and **the FPGA version has not caught up**. The FPGA design plays the
-**earlier version** of Stages 1, 2 and 3, joined by single still pictures. Everything below was tested
+**earlier version** of Stages 1, 2 and 3, joined by single still pictures. One change from the latest
+game has been added: Stage 1 answer feedback. Everything below was tested
 in **simulation only** (Icarus Verilog). It has not yet been synthesised in Vivado or run on the board.
 
 ## What works (in simulation)
@@ -15,20 +16,23 @@ in **simulation only** (Icarus Verilog). It has not yet been synthesised in Viva
 | Stage 1, Final Exam (earlier version) | Movement, collision, camera, puzzles, cards, inventory, item effects, hearts, door password |
 | Stage 2, Internship (earlier version) | Its puzzles and circuit wiring, using the board's buttons and switches instead of a mouse |
 | Stage 3, Graduation obby (earlier version) | Obstacle course with its physics and screens |
+| Stage 1 answer feedback (latest game) | Wrong answers are rejected with "INCORRECT!"; correct answers show "CORRECT!" and are saved to the notebook. Tested against the latest Pygame code |
 | Shared features | 4 character forms, random cards, hearts, demo menu (SW12) |
 | VGA graphics | 640×480 output; the screen frames we test match our Python model pixel for pixel |
 | Large pictures | Read from the board's flash chip, because they do not fit in the FPGA's block memory |
 | Missing flash data | Shows stripes and a red LED instead of a picture |
 
 Stage 1 and Stage 2 game logic was compared with the earlier Pygame version tick by tick on
-20 November. That comparison has not been repeated since the later changes. Stage 3 logic matches our
+20 November. Since the answer feedback change, the old test scenario that enters a wrong answer on purpose
+fails as intended and still needs rewriting. Stage 3 logic matches our
 fixed-point Python model bit for bit, and the model stays within 2 mm of the earlier Pygame version.
 
 ## What is not done
 
 | Part | Status |
 |---|---|
-| Stage 1 and 2 changes from the latest game | Not started. Our tests against the latest game fail, as expected |
+| Other Stage 1 changes, and all Stage 2 changes | Not started, apart from answer feedback. Our full tests against the latest game fail, as expected |
+| Differences left in answer feedback | The Undo item removes the last solved puzzle (the latest game always removes puzzle 4). Messages are gold, not green or red. One message omits the "press BTNR to check" hint |
 | New Stage 3, "Campus Run" | Game logic and graphics data are on a separate branch (`stage3-campus-run`). It is **not drawn on screen and not connected** to the board design |
 | Title, cutscenes, ending | One still picture each: no animation, no other slides, no fades |
 
@@ -58,7 +62,7 @@ fixed-point Python model bit for bit, and the model stays within 2 mm of the ear
 ## Next steps
 
 1. Build in Vivado and test on the board.
-2. Update Stage 1 and 2 to the latest game.
+2. Finish updating Stage 1, then Stage 2, to the latest game.
 3. Connect Campus Run to the screen and controls.
 4. Add the animated title, cutscenes and endings.
 
