@@ -289,3 +289,10 @@ Stage 1/2 format** (`fields[3071:0]` 24-bit numbers + `conds[255:0]` booleans, f
 - Python reference `cr_model.Model.publish()`; RTL fields/conds bit-exact with it on every step of every
   scenario (cr_tb_cosim prints them); `publish()` checked against the numbers `render.py` / `hud.py` compute
   from the float game state (named half-pixel ties only).
+
+### Task 13: Frame reference (user decision, 2026-11-27)
+
+`fpga/tools/cr_frame.py`: the world frame drawn only from the published fields / conds / footprint port and the
+asset files, in draw_frame's order; `cr_test_frame.py` checks it pixel-exact against `render.draw_frame()`
+(effects that need float positions or sin() of time excluded and listed), checks the 352 → 360 row stretch
+against Pillow, and reports the ROM version's closeness. Previews `mem/preview/cr_frame_1..3.png`.

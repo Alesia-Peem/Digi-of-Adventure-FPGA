@@ -110,9 +110,17 @@ Because `32*col` is always even, this equals `32*col - round(cam*32)` exactly, t
 
 ### 2.3 Vertical: 352 → 360
 
-The world image is 640 × 352 and `render.py:200` resizes it to 640 × 360 with NEAREST. Pillow's NEAREST takes
-source row `floor((r + 0.5) * 352 / 360)` for output row r (to be confirmed by the frame model, not assumed).
-HUD primitives are drawn afterwards in 360-row space.
+The world image is 640 × 352 and `render.py:200` resizes it to 640 × 360 with Pillow's NEAREST, which shows
+these **8 source rows twice: 22, 65, 109, 153, 198, 242, 286, 329** (so output row r shows source row
+r − (number of those rows below r)). Exact maths, floor((r + 0.5) × 352 / 360), differs from Pillow at output
+rows 67, 112, 157 and 337, so use the list (`cr_frame.DOUBLED`, checked against Pillow 11.2.1 by
+`cr_test_frame.py`). HUD primitives are drawn afterwards in 360-row space.
+
+**Frame reference:** `tools/cr_frame.py` draws the whole world frame from the published fields / conds /
+footprint port and the asset files alone, in draw_frame's order; it is pixel-exact against `render.draw_frame()`
+(1 417 frames, 6 differing only by a known 1 px float tie; snow, stars, wind, tea sparkles, player particles and
+the flash ring excluded, see its docstring). `assets="rom"` gives what the hardware's ROMs show (42 dB mean
+PSNR against the exact frame). Use it as the expected picture for the renderer's frame check.
 
 ### 2.4 Backdrop (QSPI flash, decision D1)
 

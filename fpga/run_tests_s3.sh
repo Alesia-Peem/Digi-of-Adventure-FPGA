@@ -15,6 +15,10 @@ echo "== 2. integer model vs the original game.py, step by step"
 (cd "$ROOT" && python3 -I fpga/tools/cr_test_model.py 2>&1) > sim/cr_test_model.log || { quiet < sim/cr_test_model.log; exit 1; }
 grep -E "^CR_TEST|random|stage [123]," sim/cr_test_model.log
 
+echo "== 2b. frame reference (cr_frame.py) from the published fields vs render.draw_frame()"
+(cd "$ROOT" && python3 -I fpga/tools/cr_test_frame.py 2>&1) > sim/cr_test_frame.log || { quiet < sim/cr_test_frame.log; exit 1; }
+grep -E "^CR_TEST|frames" sim/cr_test_frame.log
+
 echo "== 3. scenario files for the RTL (game and model must agree while writing them)"
 (cd "$ROOT" && python3 -I fpga/tools/cr_cosim.py gen 2>&1) > sim/cr_gen.log || { quiet < sim/cr_gen.log; exit 1; }
 grep "^cr " sim/cr_gen.log
