@@ -84,3 +84,5 @@ Task 7: complete (commits 54b526a..028f543, review clean)
 Task 7: minor (deferred): line_renderer.v:707 comment on rd_x sampling wrong; tb_frame/tb_frame2 FLASH_BYTES hard-coded + stale pictures.hex possible; frames12 pipeline hides generator failure; ui_*.png previews stale (old 64-colour rooms); no top-level room frame through real wiring
 Task 8: dispatched (sonnet, raised one tier from R16 'easy': flash config errors only show on the board). Plus R17 STATUS section and T2 README minors.
 Task 8: implemented, committed d55f132 and pushed (UNREVIEWED); agent ended without a report.
+Task 8: review — spec ✅, 1 Important (README rebuild steps), 1 minor (free flash size); both fixed in 93f851b (diff checked by controller). Task 8: complete.
+Full run_tests.sh started 2026-11-27 (log in session scratchpad full_run.log).
